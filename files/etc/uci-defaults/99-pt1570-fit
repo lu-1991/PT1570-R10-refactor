@@ -64,8 +64,8 @@ esac
 # ---- LAN 接线（新机型在 02_network 里没有 case，会落到默认分支） ----
 # ✅ 2026-11-09 R10 真机 FDT 实证：`realtek,lan-phys = <&phy0 &phy1 &phy2 &phy3>`
 #    （4×GE 内部 GPHY，MDIO reg 1..4），netdev 为 lan1..lan4；PON 侧有
-#    pon0 / pon-omci / pon-oam0 / pon0.1101，WAN 走 pppoe-wan。
-#    默认分支的 lan1..lan4 + WAN=pon0 与实测一致，不需要额外补写。
+#    pon0 / pon-omci / pon-oam0 / pon0.<vlan>，PON 侧 netdev 实测如此。
+#    本固件出厂无默认 WAN（由用户自行配置），本脚本只兜底 LAN 接线，不写 WAN。
 #    新固件真机启动后仍需用 `ip -br link` 复核一次（DTS 已 VERIFIED，外围键值仍需复测）。
 # H10 分支（DORMANT，暂缓）：设备未上线，无真机数据，不要启用。
 case "$(board_name)" in

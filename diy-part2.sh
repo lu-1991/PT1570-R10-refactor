@@ -301,25 +301,6 @@ grep -q '^CONFIG_MTD_ROOTFS_ROOT_DEV=y$' target/linux/generic/config-6.18 \
   || fail "generic config-6.18 缺少 CONFIG_MTD_ROOTFS_ROOT_DEV=y"
 echo "  OK   UIMAGE_FIT_BLK + MTD_ROOTFS_ROOT_DEV"
 
-# 默认 WAN = pon0.1101 + PPPoE + PON FE（2026-11-11 真机实证——仅 R10 验证过）。
-# 其它机型的上行 VLAN 未在本仓库验证，不带这套默认值，由上游默认配置接管。
-WAN_DEF=files/etc/uci-defaults/95-pt1570-wan-default
-if [ "$PROFILE" = "youhua_pt1570_r10" ]; then
-  test -f "$WAN_DEF" \
-    || fail "缺少默认 WAN 的 uci-defaults 脚本"
-  grep -q 'wan_vlan=1101' "$WAN_DEF" \
-    || fail "默认上网 VLAN 未设为 1101"
-  grep -q "pon.pon.offload='1'" "$WAN_DEF" \
-    || fail "默认未打开 PON FE(offload=1)，单播上行会全丢"
-  ! grep -q "type='8021q'" "$WAN_DEF" \
-    || fail "uci 值里出现了字面单引号，netifd 认不出设备类型"
-  echo "  OK   default WAN -> pon0.1101 (pppoe) + PON FE on"
-else
-  # 同步删掉资产树与源码树两份副本，避免 payload 校验 MISMATCH / 镜像带错 VLAN
-  rm -f "$WAN_DEF" "$ASSETS/files/etc/uci-defaults/95-pt1570-wan-default"
-  echo "  SKIP default WAN（$PROFILE 非 R10，VLAN 未验证，交由上游默认）"
-fi
-
 # 板级注入核验
 grep -q "SUPPORTED_DEVICES += youhua,pt1570-r10" target/linux/rtl9617c/image/Makefile \
   || fail "image/Makefile 缺少 SUPPORTED_DEVICES"

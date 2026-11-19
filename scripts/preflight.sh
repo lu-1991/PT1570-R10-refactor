@@ -25,7 +25,6 @@ for f in diy-part1.sh diy-part2.sh \
          scripts/patch-upstream.sh scripts/verify-rf-tables.py \
          scripts/verify-fit-boot.py \
          board/dts/rtl9617c-pt1570-r10.dts board/devices/pt1570-r10.mk.inc \
-         files/etc/uci-defaults/95-pt1570-wan-default \
          files/etc/uci-defaults/96-pt1570-r10-leds \
          files/etc/uci-defaults/97-pt1570-r10-wifi24 \
          files/etc/uci-defaults/98-pt1570-r10-wifi-stability \
@@ -353,11 +352,16 @@ grep -q 'of_machine_is_compatible("youhua,pt1570-r10")' scripts/patch-upstream.s
   || bad "patch-upstream 缺 xram R10 命名修补"
 test -f files/etc/uci-defaults/96-pt1570-r10-leds \
   && ok "R10 面板灯纠正脚本在位" || bad "缺 96-pt1570-r10-leds"
-grep -q 'lan0|"\$vlan_dev"' files/etc/uci-defaults/95-pt1570-wan-default \
-  && ok "陈旧 wan=lan0 已纳入纠正白名单" || bad "95 脚本未覆盖陈旧 lan0 WAN"
-WAN_SCRIPT=files/etc/uci-defaults/95-pt1570-wan-default
-grep -q 'youhua,pt1570-r10' "$WAN_SCRIPT" \
-  && ok "WAN 默认脚本按板判别" || bad "WAN 默认脚本缺板级判别"
+# 默认 WAN 已按用户要求彻底去掉（pon0.1101 + PPPoE + PON FE 三项全无）：
+# 本机 95 脚本必须不存在，且 apply-board.sh 必须在编译时删掉上游 90 脚本，
+# 否则上游 90 会在首次开机写出 pon0.3961 + PPPoE 的默认 WAN。
+[ ! -e files/etc/uci-defaults/95-pt1570-wan-default ] \
+  && ok "本机默认 WAN 脚本已移除（无 pon0.1101/PPPoE/PON FE）" \
+  || bad "95-pt1570-wan-default 仍在：出厂会带默认 WAN，与要求不符"
+grep -q '90-tyfza1-pon-wan' scripts/apply-board.sh \
+  && grep -q 'rm -f "$UPSTREAM_WAN"' scripts/apply-board.sh \
+  && ok "apply-board.sh 会删除上游 90 默认 WAN 脚本" \
+  || bad "apply-board.sh 未删除上游 90-tyfza1-pon-wan（首次开机会冒出 PPPoE WAN）"
 
 # ---------------------------------------------------------------
 sec "7d. 系统内升级修复（上游 8c91b228b4：release fitblk before sysupgrade）"

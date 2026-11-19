@@ -17,6 +17,7 @@
    `pon: apply EPON queues per queue like stock`；写完整 40 位 SHA 才能字节级复现）
 - 产物形态：**FIT ABI + squashfs + UBI**，`root=/dev/fit0`（固件自洽，不依赖 bootloader 注入）
 - 验证状态：**PT1570-R10 已真机验证**（启动 / 4×GE / 双频无线 / PPPoE 拨号 / 面板灯）
+  - 注：固件**不带默认 WAN**（pon0.1101 / PPPoE / PON FE 已全部去掉），首次开机需自行配置上网；上述 PPPoE 拨号指真机验证过该能力，非出厂预设。
 
 ---
 
@@ -26,7 +27,7 @@
 |---|---|
 | SoC | Realtek RTL9617C，4×ARM Cortex-A55，target `rtl9617c/generic`（`aarch64_cortex-a55`） |
 | 有线 | 4×GE（内部 GPHY 4 颗），面板标 LAN1–LAN4 |
-| 上行 | PON（`tyfza1-pon-control` 驱动，默认 VLAN `1101` + PPPoE） |
+| 上行 | PON（`tyfza1-pon-control` 驱动；**无默认 WAN**，自行配置 VLAN/协议） |
 | 5G | RTL8852CE（PCIe0 → `phy0`），协议/信道由驱动能力推导（HE80 / auto），见 §6 |
 | 2.4G | RTL8192XBE（PCIe1 → `phy1`），协议/信道由驱动能力推导（HE20 / auto），见 §6 |
 | 存储 | SPI NAND + UBI 5 分区；rootfs 以 FIT 子镜像形式挂在 `/dev/fit0` |
@@ -70,8 +71,8 @@
 | `tianyi_tyfza1_4ge` | 天邑 TYFZA1 4GE | `tyfza1-4ge` | ⚠️ 上游机型，未验证 |
 | `youhua_pt1500_h10_2p5g` | 友华 PT1500-H10 2.5G | `pt1500-h10-2p5g` | ⚠️ 上游机型，未验证 |
 
-非 R10 机型不会带本仓库的默认 WAN（`pon0.1101`）与面板灯纠正 —— 这些只在 R10 上验证过，
-硬套会直接不通网，所以 `diy-part2.sh` 会主动删掉。
+非 R10 机型不会带本仓库的面板灯纠正等 R10 专属逻辑 —— 这些只在 R10 上验证过，
+硬套会不适用，所以 `diy-part2.sh` 会主动删掉。默认 WAN 已彻底去掉，所有机型均不带。
 
 ---
 
@@ -100,13 +101,22 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
 | 管理地址 | `192.168.1.1`（root 无密码，首登请自行设置） |
 | 主机名 | 跟随机型，如 `PT1570-R10` |
 | 时区 | `Asia/Shanghai`，NTP 用国内源（aliyun / tencent / ntsc / cn.pool） |
-| WAN | `pon0.1101`（8021q）+ PPPoE + PON FE(`offload=1`)，账号密码留空待填 |
+| WAN | **无默认 WAN**（`pon0.1101`/PPPoE/PON FE 已全部去掉），首次开机需自行配置上网 |
 | 5G | SSID `PT1570-R10-5G`，**开放（无密码）**，htmode/信道交还驱动推导（预期 HE80 / auto） |
 | 2.4G | SSID `PT1570-R10-2.4G`，**开放（无密码）**，htmode/信道交还驱动推导（预期 HE20 / auto） |
 | 面板灯 | 跟随真实网口（EPHY0..3 → LAN4..LAN1） |
 
 所有默认值都是"仅在仍是出厂默认时才改"，用户动过的项不会被覆盖。
 **想改回加密**：LuCI → 网络 → 无线 → 修改 → 加密选 WPA2-PSK 并设密码即可，不需要重新编译。
+
+> **关于"无默认 WAN"**：本固件出厂不带任何 WAN 配置。PON 驱动（`tyfza1-pon-control`）
+> 仍在，光模块/LAN/WiFi 正常工作，但 `pon0` 的 VLAN 子接口、PPPoE 协议、PON 转发引擎
+> （`offload`）都不再自动设置。首次开机后请到 **网络 → 接口** 自行新建 WAN：
+> 设备填 `pon0.<你的VLAN>`（Point-to-Point 协议选 PPPoE 并填账号密码），PON 页按运营商
+> 填 LOID/SN。之前版本会自动写成 `pon0.1101` + PPPoE + `offload=1`，
+> 现已从两处移除：本机 `files/etc/uci-defaults/95-pt1570-wan-default`（已删除），
+> 以及上游 `target/.../uci-defaults/90-tyfza1-pon-wan`（由 `apply-board.sh` 在编译时删除，
+> 避免首次开机又冒出一个 `pon0.3961` 的默认 PPPoE WAN）。`preflight.sh` 会校验这两点。
 
 ---
 
@@ -253,7 +263,6 @@ let htmode = filter(htmode_order, (m) => band[lc(m)])[0];
 │   └── youhua_pt1570-r10.config     # 机型无关的基础包集合（机型由 target_model 决定）
 ├── files/                           # 原样覆盖进 rootfs
 │   ├── etc/init.d/tyfza1-factory            # factory 校准提取（必须精确 284 字节）
-│   ├── etc/uci-defaults/95-pt1570-wan-default  # 默认 WAN：pon0.1101 + PPPoE + PON FE
 │   ├── etc/uci-defaults/96-pt1570-r10-leds     # 面板灯 → 真实网口
 │   ├── etc/uci-defaults/97-pt1570-r10-wifi24   # 2.4G 首启兜底：country/启用/不隐藏（见 §6）
 │   ├── etc/uci-defaults/98-pt1570-r10-wifi-stability  # 断流缓解：不踢空闲终端 + country（见 FAQ）

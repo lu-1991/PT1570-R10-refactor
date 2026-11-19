@@ -179,7 +179,27 @@ print('pt1500-fip.sh 已加机型守护（%d 行函数体）' % len(body))
 PY
 fi
 
+# ---- 3e. 去掉默认 WAN（pon0.1101 + PPPoE + PON FE）----
+# 上游 90-tyfza1-pon-wan 会在首次开机写入 WAN：pon0.<wan_vlan>（默认 3961）
+# + PPPoE + 关闭 PON offload（照抄 PT1500 EPON 布局）。本机 files/ 原先还用
+# 95-pt1570-wan-default 覆盖成 R10 实测的 1101 + offload=1。
+# 按用户决定：彻底不要任何默认 WAN（三项全去），LAN/WiFi/时区等仍照常。
+# 做法：删上游 90 脚本 + 本机 95 脚本（95 已从 files/ 移除，无需在此处理），
+# 只在 R10 机型执行，PON 驱动本身保留（用户仍可自行配置 WAN）。
+if [ "$BOARD" = "r10" ]; then
+  UPSTREAM_WAN="$WRT/target/linux/rtl9617c/base-files/etc/uci-defaults/90-tyfza1-pon-wan"
+  if [ -f "$UPSTREAM_WAN" ]; then
+    rm -f "$UPSTREAM_WAN"
+    echo "removed upstream default WAN uci-default: 90-tyfza1-pon-wan"
+  fi
+fi
+
 # ---- 结果校验 ----
+# 出厂必须无默认 WAN：上游 90 脚本若仍在，首次开机又会写出 PPPoE WAN
+if [ "$BOARD" = "r10" ] && [ -f "$UPSTREAM_WAN" ]; then
+  echo "ERROR: 上游 90-tyfza1-pon-wan 未移除，出厂会有默认 WAN" >&2
+  exit 1
+fi
 grep -q "SUPPORTED_DEVICES += ${BOARD_NAME}" "$IMG_MK" \
   || { echo "ERROR: SUPPORTED_DEVICES missing" >&2; exit 1; }
 grep -q "$BOARD_NAME" "$PLATFORM" \
