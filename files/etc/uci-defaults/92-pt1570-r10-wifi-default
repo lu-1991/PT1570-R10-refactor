@@ -1,0 +1,43 @@
+#!/bin/sh
+# 提取自 new-fit-4ge-20261119.itb 的 /etc/uci-defaults/92-tyfza1-wifi-default
+# 按 PT1570-R10 命名。作用：首启启用双频、按本机 LAN MAC 生成 SSID 与 WPA2-PSK 密钥，
+# 使刷机后不开 LuCI 也能直接连上 2.4G / 5G。仅首启执行一次（system 标记），
+# 用户之后改过的 SSID/密钥不会被覆盖。
+[ "$(uci -q get system.@system[0].pt1570_wifi_default)" = "1" ] && exit 0
+
+base=""
+for f in /tmp/tyfza1-factory/lan_mac /sys/class/net/br-lan/address; do
+	if [ -r "$f" ]; then
+		base=$(tr -d ':' < "$f" | tr 'A-F' 'a-f')
+		break
+	fi
+done
+
+suffix=$(printf '%s' "$base" | tail -c 4)
+[ -n "$suffix" ] || exit 0
+
+# radio 与频段的对应关系按 band 判定，避免不同板型 radio0/1 顺序颠倒。
+radio5g="" radio2g=""
+for dev in $(uci -q show wireless | sed -n 's/^wireless\.\([A-Za-z0-9_]*\)=wifi-device$/\1/p'); do
+	band="$(uci -q get "wireless.$dev.band" 2>/dev/null)"
+	[ "$band" = "5g" ] && radio5g="$dev"
+	[ "$band" = "2g" ] && radio2g="$dev"
+done
+# 老配置没有 band 时回退到 ITB 的顺序（radio0=5G, radio1=2.4G）
+[ -n "$radio5g" ] || radio5g="radio0"
+[ -n "$radio2g" ] || radio2g="radio1"
+
+uci -q set "wireless.$radio5g.disabled=0"
+uci -q set "wireless.$radio2g.disabled=0"
+uci -q set "wireless.default_$radio5g.disabled=0"
+uci -q set "wireless.default_$radio5g.ssid=PT1570-R10-5G-$suffix"
+uci -q set "wireless.default_$radio5g.encryption=psk2"
+uci -q set "wireless.default_$radio5g.key=12345678"
+uci -q set "wireless.default_$radio2g.disabled=0"
+uci -q set "wireless.default_$radio2g.ssid=PT1570-R10-$suffix"
+uci -q set "wireless.default_$radio2g.encryption=psk2"
+uci -q set "wireless.default_$radio2g.key=12345678"
+uci -q set system.@system[0].pt1570_wifi_default='1'
+uci -q commit wireless
+uci -q commit system
+exit 0

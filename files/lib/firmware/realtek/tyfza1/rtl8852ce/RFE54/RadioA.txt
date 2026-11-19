@@ -51,6 +51,7 @@
 0x1A 	0x40004 //OFDM/CCK?K	
 //RCK		
 
+
 // RXA Beacon Mixer Gate Bias		
 0x96	0x15200  //0120_RXA_Beacon	
 

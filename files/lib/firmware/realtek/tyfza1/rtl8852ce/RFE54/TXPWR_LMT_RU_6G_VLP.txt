@@ -447,7 +447,7 @@ CH253	NA
 ##	START				
 ##	#1#				
 ##	MKK				
-PShape	0
+PShape	0				
 // 6G UNII-5					
 CH01	0.5				
 CH05	0.5				

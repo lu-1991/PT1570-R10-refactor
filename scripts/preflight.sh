@@ -29,6 +29,10 @@ for f in diy-part1.sh diy-part2.sh \
          files/etc/uci-defaults/97-pt1570-r10-wifi24 \
          files/etc/uci-defaults/98-pt1570-r10-wifi-stability \
          files/etc/uci-defaults/99-pt1570-fit \
+         files/etc/modules.d/50-rtl-ax-ap \
+         files/etc/hotplug.d/ieee80211/10-wifi-detect \
+         files/etc/uci-defaults/92-pt1570-r10-wifi-default \
+         files/etc/uci-defaults/92-pt1570-r10-wireless-country \
          files/etc/init.d/tyfza1-factory; do
   [ -f "$f" ] && ok "$f" || bad "缺 $f"
 done
@@ -65,10 +69,10 @@ else
 fi
 
 # ---------------------------------------------------------------
-sec "3. 射频表完整性（42 张 RFE54 表）"
+sec "3. 射频表完整性（ITB 全量 ≥70 张表）"
 T=files/lib/firmware/realtek/tyfza1
 n=$(find "$T" -name '*.txt' | wc -l)
-[ "$n" = 42 ] && ok "42 张 .txt" || bad "射频表 $n != 42"
+[ "$n" -ge 70 ] && ok "射频表 $n 张（≥70）" || bad "射频表 $n < 70"
 nb=$(find "$T" -name '*.bin' | wc -l)
 [ "$nb" -ge 7 ] && ok "WiFi 固件 bin ≥ 7 ($nb)" || bad "bin 仅 $nb"
 python3 scripts/verify-rf-tables.py "$T" >/dev/null \
@@ -425,6 +429,33 @@ grep -q 'factory_fallback ' files/etc/init.d/tyfza1-factory \
   || bad "tyfza1-factory 缺 factory_fallback 兜底逻辑"
 sh -n files/etc/init.d/tyfza1-factory \
   && ok "tyfza1-factory 语法检查通过" || bad "tyfza1-factory 语法错误"
+
+# ---------------------------------------------------------------
+sec "7f. ITB 无线方案资产（2026-11-19 从 new-fit-4ge-20261119.itb 移植）"
+# 新增的两套射频参数目录必须齐全（2.4G RFE50+PON_2G / 5G YH9570）。
+for d in \
+  files/lib/firmware/realtek/tyfza1/rtl8192xbe/RFE50 \
+  files/lib/firmware/realtek/tyfza1/rtl8192xbe/RFE50/PON_2G \
+  files/lib/firmware/realtek/tyfza1/rtl8852ce/RFE54/RTK66587_BPF_YH9570; do
+  [ -d "$d" ] && ok "$(basename "$d")/ 射频目录在位" || bad "缺 $d（ITB 无线方案不完整）"
+done
+# 5G 平台校准 284B 必须是 ITB 原值（TYFC0003 头，修正部分机器 5G 无发射）。
+FBC=files/lib/firmware/realtek/tyfza1/rtl8852ce/flash-calibration.factory-fallback.bin
+[ "$(stat -c %s "$FBC" 2>/dev/null)" = "284" ] \
+  && [ "$(head -c 8 "$FBC")" = "TYFC0003" ] \
+  && ok "5G fallback 为 ITB 284B TYFC0003 平台校准" \
+  || bad "5G fallback 非 284B TYFC0003"
+# 模块加载 + 首启 SSID 配置必须在位，且不引入默认 WAN。
+grep -q '^rtl_ax_ap$' files/etc/modules.d/50-rtl-ax-ap \
+  && ok "rtl_ax_ap 模块自动加载在位" || bad "50-rtl-ax-ap 未加载 rtl_ax_ap"
+grep -q 'PT1570-R10-5G-' files/etc/uci-defaults/92-pt1570-r10-wifi-default \
+  && grep -q 'PT1570-R10-' files/etc/uci-defaults/92-pt1570-r10-wifi-default \
+  && ok "首启双频 SSID 由 LAN MAC 生成" || bad "92-wifi-default 缺 SSID 派生逻辑"
+for s in 92-pt1570-r10-wifi-default 92-pt1570-r10-wireless-country \
+         97-pt1570-r10-wifi24 98-pt1570-r10-wifi-stability; do
+  ! grep -qE 'pon0\.|pppoe|PPPoE|interface .*wan' "files/etc/uci-defaults/$s" \
+    && ok "$s 无默认 WAN 注入" || bad "$s 混入了默认 WAN 配置"
+done
 
 # ---------------------------------------------------------------
 sec "8. 源码树注入深度校验（可选，WRT=源码树时执行）"

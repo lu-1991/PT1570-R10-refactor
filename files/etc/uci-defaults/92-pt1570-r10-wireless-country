@@ -1,0 +1,17 @@
+#!/bin/sh
+# 提取自 new-fit-4ge-20261119.itb 的 /etc/uci-defaults/92-tyfza1-wireless-country
+# 作用：为所有 wifi-device 补默认国家码 CN（149/80MHz 合法功率表所需）。
+. /lib/functions.sh
+
+[ -f /etc/config/wireless ] || exit 0
+
+set_default_country() {
+	local country
+	config_get country "$1" country
+	[ -n "$country" ] || uci set "wireless.$1.country=CN"
+}
+
+config_load wireless
+config_foreach set_default_country wifi-device
+uci commit wireless
+exit 0

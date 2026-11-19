@@ -20,6 +20,7 @@
 0x97	0x43200	
 0xA6	0x66DB7	
 
+
 // RXG_setting		
 // RXG_BS_table		
 // RXG_gain_table		

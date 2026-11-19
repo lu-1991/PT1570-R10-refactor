@@ -254,6 +254,42 @@ let htmode = filter(htmode_order, (m) => band[lc(m)])[0];
 > 顺带纠正一个常见误判：`iwinfo` 显示的 `HT Mode: HT40` **不代表真实带宽**，它读的是
 > `ht_capab` 里的 `SHORT-GI-40` 标志位。真实带宽只看 `iw dev phyX-ap0 info` 的 `width`。
 
+### 6.1 2026-11-19 无线方案全量替换（来自 `new-fit-4ge-20261119.itb`）
+
+把桌面 `new-fit-4ge-20261119.itb` 解包后，确认其无线方案与本仓库**同源**：
+
+| 项目 | ITB 实机证据 | 结论 |
+|---|---|---|
+| AP 驱动 | `/etc/modules.d/50-rtl-ax-ap` → `rtl_ax_ap`；`kmod-rtl-ax-ap.list` 含 `mac80211.ko` + `rtl_ax_ap.ko` | `rtl_ax_ap` + cfg80211/mac80211，**不是** rtw88/rtw89/mt76 |
+| 2.4G | `rtl8192xb-u1-ap.bin` / `rtl8192xb-u2-ap.bin`、`rtl8192xbe/RFE54|RFE50|PON_2G` | RTL8192XB / RTL8192XBE |
+| 5G | `rtl8852c-u1-ap.bin` / `rtl8852c-u2-ap.bin`、`rtl8852ce/RFE54/RTK66587_BPF[_YH9570]` | RTL8852C / RTL8852CE |
+| 内核 | `vermagic=6.18.55 SMP mod_unload aarch64` | 与云编译内核口径一致 |
+
+按用户选择**「固件 + 射频表 + 配置全换」+ 校准「同时覆盖」**执行：
+
+- **固件**：`files/lib/firmware/realtek/tyfza1/` 整目录由 ITB 的
+  `lib/firmware/realtek/tyfza1/` 覆盖；新增 `rtl8192xbe/RFE50/`（含 `PON_2G/`）、
+  `rtl8852ce/RFE54/RTK66587_BPF_YH9570/` 两组此前缺失的射频目录。
+  射频表从 42 张增至 **70 张**，`scripts/verify-rf-tables.py` 逐字段模拟解析
+  **70 张 / 0 失败**。
+- **校准**：5G 的 `flash-calibration.factory-fallback.bin` 用 ITB 内唯一的 built-in
+  284B 平台校准覆盖（源 `etc/tyfza1/wifi-default/rtl8852ce/flash-calibration.bin`，
+  md5 `07f1bd22ed4be057f9f007281a04aa3a`，头 `TYFC0003`）；2.4G fallback **保持原样**
+  —— ITB 里 2.4G 只有指向 `/tmp/tyfza1-factory/...` 的 symlink，没有独立 built-in 文件。
+  `flash-calibration.bin` 仍为 git mode `120000` 的符号链接，运行时由 factory 生成。
+- **配置**：移植并按 PT1570-R10 改名——
+  `etc/modules.d/50-rtl-ax-ap`（模块自动加载）、
+  `etc/hotplug.d/ieee80211/10-wifi-detect`（无线 add 后重跑 `wifi config`）、
+  `etc/uci-defaults/92-pt1570-r10-wifi-default`（LAN MAC 后四位生成
+  `PT1570-R10[-5G]-xxxx` / `psk2` / `12345678`）、
+  `etc/uci-defaults/92-pt1570-r10-wireless-country`（默认 `country=CN`）。
+
+**刻意不移植**：ITB 里编译好的 `.ko` 是 6.18.55 绑定的产物，云编译必须从源码构建；
+ITB 的 `90-tyfza1-pon-wan` / `91-tyfza1-lan1-wan*` / dawn / mesh 等脚本含默认 WAN，
+与「彻底无默认 WAN」口径冲突；`init.d/tyfza1-factory` 是 TYFZA1 的 UBI factory 机制，
+本仓库沿用 PT1570-R10 已真机验证的 RTLFACT1 机制。preflight §7f 对上述资产与
+「新增脚本零 WAN 注入」逐项设了断言。
+
 ---
 
 ## 7. 目录结构
@@ -265,12 +301,16 @@ let htmode = filter(htmode_order, (m) => band[lc(m)])[0];
 ├── configs/
 │   └── youhua_pt1570-r10.config     # 机型无关的基础包集合（机型由 target_model 决定）
 ├── files/                           # 原样覆盖进 rootfs
+│   ├── etc/modules.d/50-rtl-ax-ap            # rtl_ax_ap 模块自动加载（ITB 移植，见 §6.1）
+│   ├── etc/hotplug.d/ieee80211/10-wifi-detect # 无线 add 后重跑 wifi config（ITB 移植）
+│   ├── etc/uci-defaults/92-pt1570-r10-wifi-default  # 双频首启 SSID/加密（ITB 移植，见 §6.1）
+│   ├── etc/uci-defaults/92-pt1570-r10-wireless-country # 默认 country=CN（ITB 移植）
 │   ├── etc/init.d/tyfza1-factory            # factory 校准提取（必须精确 284 字节）
 │   ├── etc/uci-defaults/96-pt1570-r10-leds     # 面板灯 → 真实网口
 │   ├── etc/uci-defaults/97-pt1570-r10-wifi24   # 2.4G 首启兜底：country/启用/不隐藏（见 §6）
 │   ├── etc/uci-defaults/98-pt1570-r10-wifi-stability  # 断流缓解：不踢空闲终端 + country（见 FAQ）
 │   ├── etc/uci-defaults/99-pt1570-fit          # 时区/主机名/FIT 接线兜底
-│   └── lib/firmware/realtek/tyfza1/            # WiFi AP 固件 8×bin + 42 张 RFE54 射频表
+│   └── lib/firmware/realtek/tyfza1/            # ITB 全量 AP 固件 + 70 张射频表（含 RFE50/PON_2G/YH9570，见 §6.1）
 ├── board/
 │   ├── dts/rtl9617c-pt1570-r10.dts  # 板级 DTS（root=/dev/fit0 自洽启动、按键修正）
 │   ├── devices/pt1570-r10.mk.inc    # image/Makefile 的 Device 定义片段
@@ -280,7 +320,7 @@ let htmode = filter(htmode_order, (m) => band[lc(m)])[0];
 │   ├── overlay-wifi-driver.sh       # 整套替换驱动（含 pe-tx-code.h md5 强校验）
 │   ├── patch-upstream.sh            # 上游修补：factory 284 / fitblk 上限 / R10 端口命名
 │   ├── preflight.sh                 # 静态自检，编译前跑，任何 FAIL 立即终止
-│   ├── verify-rf-tables.py          # 42 张表逐字段模拟驱动解析器
+│   ├── verify-rf-tables.py          # 70 张表逐字段模拟驱动解析器（ITB 全量，见 §6.1）
 │   └── verify-fit-boot.py           # 产物 FIT 结构 + bootargs 可启动性校验
 ├── .github/workflows/
 │   └── Build-PT1570-R10.yml         # 唯一 workflow（32 步）
