@@ -37,7 +37,7 @@ SSID_5G="${SSID_5G:-${WRT_SSID}-5G}"
 SSID_24G="${SSID_24G:-${WRT_SSID}-2.4G}"
 WRT_TZ="${WRT_TZ:-<+08>-8}"
 WRT_ZONENAME="${WRT_ZONENAME:-Asia/Shanghai}"
-FW_AUTHOR="${FW_AUTHOR:-lu-1991}"
+FW_AUTHOR="${FW_AUTHOR:-lu1991}"
 echo "TARGET_MODEL=$PROFILE (hostname/SSID=$MODEL_LABEL)"
 
 CFG="package/base-files/files/bin/config_generate"
@@ -69,14 +69,6 @@ echo "---- [1b/7] 无线模板（SSID 分频段 / 首启启用） ----"
 # mac80211.uc 是 /etc/config/wireless 的生成器，必须改掉的行为：
 #   默认把 wifi-iface 写成 disabled='1'（只有 board.json 带 wlan.defaults
 #   才启用，R10 没有），结果"刷完看不到任何 SSID"。
-#
-# htmode / 信道**不做任何钉死**，完全交还驱动能力推导（与原厂固件行为一致，
-# 2026-11-16 对比原厂 rootfs 后的决定）：
-#   - 驱动宣称 HE（2G/5G 都宣称）-> 2G 推导为 HE20、5G 为 HE80（>80 封顶 80）
-#   - 驱动无 EHT 能力，htmode_order 里的 "EHT" 永远不会被选中
-#
-# 用 python 做整段精确替换，不用 sed：模板里含 "||" 与引号，sed 分隔符很难选；
-# 而且上游只要缩进差一个 tab，sed 就会"改不动也不报错"地静默失配。
 if [ -f "$WIFI_UC" ]; then
   command -v python3 >/dev/null 2>&1 \
     || fail "改写 mac80211.uc 需要 python3"
@@ -146,10 +138,7 @@ if grep -qE "htmode='?[A-Z]+[0-9]+|channel='?[0-9]+" "$WIFI24"; then
 fi
 echo "✅ 2.4G 开机兜底脚本就位：$WIFI24"
 
-echo "---- [1d/7] 主题：沿用 argon（跳过 Fluent 拉库） ----"
-# 按用户配置口径：主题沿用 argon，不拉 Fluent、不改默认主题。
-# 厂商 pon 包的 97-rtl9617c-argon-default 会设默认主题为 argon；
-# files/ 里的 98-pt1570-fluent-default 已移除，勿再添加（会抢默认主题）。
+echo "---- [1d/7] 主题：argon ----"
 echo "✅ 主题沿用 argon（Fluent 拉库已按用户要求移除）"
 
 echo "---- [2/7] apk 源声明 ----"
