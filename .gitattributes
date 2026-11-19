@@ -1,7 +1,14 @@
+# 全仓统一 LF：Windows 上 core.autocrlf=true 会把脚本写成 CRLF，
+# CRLF 的 shell 脚本在路由器上直接报 "not found"（shebang 行带 \r）。
+# eol=lf 同时约束仓库内与工作区，比 `* text=auto` 更硬。
 * text=auto eol=lf
-*.sh text eol=lf
-*.patch text eol=lf
-*.yml text eol=lf
+
+# 明确标成二进制的资产，避免被当成文本做换行转换
+*.bin binary
+*.itb binary
+*.gz  binary
+*.png binary
+*.jpg binary
+
+# 射频表 / 配置文件保留原样（也是文本，但逐字节比对敏感）
 *.txt text eol=lf
-*.dts text eol=lf
-*.md text eol=lf

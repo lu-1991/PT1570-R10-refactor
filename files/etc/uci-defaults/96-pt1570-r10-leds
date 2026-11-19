@@ -1,0 +1,28 @@
+#!/bin/sh
+# PT1570-R10：面板 LAN 灯跟随真实网口（2026-11-14 真机逐口验证）。
+#
+# 4 个内部 GPHY 的链路灯 LED_EPHY0..3 接在 NI port0..3 上，而 PCB 把 port0..3
+# 反序接到面板：port0=LAN4、port1=LAN3、port2=LAN2、port3=LAN1（驱动命名已由
+# patch-upstream.sh 按 index = 4 - port 修正为 lan1..lan4）。
+# 上游 01_leds / 94-tyfza1-leds 的默认分支把 EPHY0..3 依次绑到 lan1..lan4，
+# 会让每盏灯点亮错误的网口。这里只在灯仍是"生成默认绑定"（EPHYi -> lan(i+1)）
+# 时纠正；用户改过的绑定一律不碰。执行序 94（上游）-> 95（WAN）-> 本脚本。
+[ "$(board_name)" = "youhua,pt1570-r10" ] || exit 0
+
+. /lib/functions.sh
+
+config_load system
+i=0
+while [ "$i" -lt 4 ]; do
+  sec="led_lan$i"
+  config_get dev "$sec" dev
+  if [ "$dev" = "lan$((i + 1))" ]; then
+    uci set "system.$sec.dev=lan$((4 - i))"
+    uci set "system.$sec.name=LAN$((4 - i))"
+    changed=1
+  fi
+  i=$((i + 1))
+done
+
+[ "${changed:-0}" = "1" ] && uci commit system
+exit 0

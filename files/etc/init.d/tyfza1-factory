@@ -1,0 +1,158 @@
+#!/bin/sh /etc/rc.common
+
+# PT1570-R10 修复版（2026-11-13）：flash-calibration.bin 写入精确 284 字节。
+#
+# 根因（真机串口 + 联机实测）：
+#   rtl_ax_ap 驱动 board-cal.h::rtl_ax_board_cal_load() 要求
+#   `fw->size == sizeof(struct rtl_ax_board_cal)` = 284 字节（TYFC0003 容器），
+#   大小不符直接返回 -EINVAL。原脚本 factory_blob 写入整块 4096 字节，
+#   两张卡（8852CE / 8192XBE）probe 全部失败：
+#     rtl_ax_ap ...: error -EINVAL: AP identity or firmware startup failed
+#     -> 没有 phy0/phy1 -> /etc/config/wireless 为空 -> 无线信号全无。
+#   把 0x2000/0x3000 处的前 284 字节写入后，probe 立即成功
+#   （native AP backend chip=0x52/0x53 ... WCPU ready，两路 SSID 正常广播）。
+#
+# factory 卷布局（RTLFACT1 魔数，已真机验证）：
+#   0x1000  6 字节  基础 MAC（10:47:e7:8d:bc:fc）
+#   0x2000  4096   8852CE（5G）校准，前 284 字节为 TYFC0003 结构体，其余 0xFF
+#   0x3000  4096   8192XBE（2.4G）校准，同上；末字节 MAC +1/+2 区分 2G/5G
+#   0x4000  1024   BOSA 光模块校准（整块写入，消费者自取）
+#   0x5000  520    PONA2H1（存在时）
+
+START=09
+
+factory_read() {
+	dd if="$factory_volume" bs=1 skip=$1 count=$2 2>/dev/null
+}
+
+factory_mac() {
+	factory_read $1 6 | hexdump -v -e '1/1 "%02x"'
+}
+
+factory_blob() {
+	local tmp
+	tmp=$(mktemp)
+	dd if="$factory_volume" of="$tmp" bs=1 skip=$1 count=$2 2>/dev/null
+	if [ -s "$tmp" ] && [ -n "$(tr -d '\377' < "$tmp")" ]; then
+		mkdir -p "${3%/*}"
+		chmod 0644 "$tmp"
+		mv "$tmp" "$3"
+	else
+		logger -t tyfza1-factory "$3 is empty, skipped"
+		rm -f "$tmp"
+		return 1
+	fi
+}
+
+# factory 卷对应区域为空时的兜底（2026-11-18）：用随固件内置的
+# flash-calibration.factory-fallback.bin（284B TYFC0003，取自本机 mtd3
+# static_conf NV_CFG 备份：thermal/xtal/TSSI/RX gaingap；扩展增益表为 0，
+# 驱动按缺表降级）+ 现场基础 MAC 填 wlan_address（偏移 0x42，末字节 +1/+2）。
+factory_fallback() {
+	local chip="$1" mac_off="$2" target="$3"
+	local fb="/lib/firmware/realtek/tyfza1/$chip/flash-calibration.factory-fallback.bin"
+	local mac last
+	[ -f "$fb" ] || { logger -t tyfza1-factory "factory fallback missing: $fb"; return 1; }
+	mkdir -p "${target%/*}"
+	cp "$fb" "$target"
+	chmod 0644 "$target"
+	mac=$(factory_mac $((0x1000)))
+	if [ "${#mac}" = 12 ] && [ "$mac" != ffffffffffff ]; then
+		last=$(printf '%02x' $((0x$(printf '%s' "$mac" | cut -c11-12) + mac_off)))
+		printf '%b' "$(printf '%s' "$(printf '%s' "$mac" | cut -c1-10)$last" \
+			| sed 's/../\\x&/g')" \
+			| dd of="$target" bs=1 seek=66 conv=notrunc 2>/dev/null
+	fi
+	logger -t tyfza1-factory "flash-calibration for $chip came from factory-fallback"
+	return 0
+}
+
+start() {
+	local runtime=/tmp/tyfza1-factory
+	local runstate=/var/run/tyfza1-factory
+	local factory_volume=
+	local device base_mac epon_mac serial mode pon_factory
+
+	rm -rf "$runtime" "$runstate"
+	if [ ! -d /sys/class/ubi/ubi0 ]; then
+		for device in /sys/class/mtd/mtd*/name; do
+			[ "$(cat "$device")" = ubi_device ] || continue
+			ubiattach /dev/ubi_ctrl -m "${device##*mtd}"
+			break
+		done
+	fi
+	if [ ! -d /sys/class/ubi/ubi0 ]; then
+		logger -t tyfza1-factory "UBI device is not attached"
+		return 1
+	fi
+	for device in /sys/class/ubi/ubi0_*/name; do
+		[ "$(cat "$device")" = factory ] || continue
+		device=${device%/name}
+		factory_volume=/dev/${device##*/}
+		break
+	done
+	if [ ! -c "$factory_volume" ]; then
+		logger -t tyfza1-factory "factory volume is missing"
+		return 1
+	fi
+	if [ "$(factory_read 0 8)" != RTLFACT1 ]; then
+		logger -t tyfza1-factory "factory volume has a bad magic"
+		return 1
+	fi
+
+	mkdir -p "$runtime/rtl9617c" \
+		"$runtime/tyfza1/rtl8852ce" "$runtime/tyfza1/rtl8192xbe"
+
+	base_mac=$(factory_mac $((0x1000)))
+	if [ "${#base_mac}" = 12 ] && [ "$base_mac" != ffffffffffff ]; then
+		printf '%s\n' "$base_mac" | sed 's/../&:/g; s/:$//' > "$runtime/lan_mac"
+	fi
+
+	# WiFi 板级校准：驱动按 sizeof(struct rtl_ax_board_cal)=284 严格校验，
+	# 多一个字节都是 -EINVAL。只写结构体本身，不要整块 4096。
+	# factory 卷该区域为空时走 fallback（否则驱动 probe -ENOENT，无线全灭）。
+	factory_blob $((0x2000)) 284 "$runtime/tyfza1/rtl8852ce/flash-calibration.bin" \
+		|| factory_fallback rtl8852ce 2 "$runtime/tyfza1/rtl8852ce/flash-calibration.bin"
+	factory_blob $((0x3000)) 284 "$runtime/tyfza1/rtl8192xbe/flash-calibration.bin" \
+		|| factory_fallback rtl8192xbe 1 "$runtime/tyfza1/rtl8192xbe/flash-calibration.bin"
+	factory_blob $((0x4000)) 1024 "$runtime/rtl9617c/bosa-calibration.bin"
+	if [ "$(factory_read $((0x5000)) 7)" = PONA2H1 ]; then
+		factory_read $((0x5000)) 520 > "$runtime/rtl9617c/a2h.bin"
+		chmod 0644 "$runtime/rtl9617c/a2h.bin"
+	fi
+
+	serial=$(factory_read $((0x1020)) 16 | tr -d '\000\377')
+	mode=$(factory_read $((0x1030)) 16 | tr -d '\000\377')
+	epon_mac=$(factory_mac $((0x1010)))
+	if [ "${#epon_mac}" != 12 ] || [ "$epon_mac" = ffffffffffff ]; then
+		epon_mac=
+	else
+		epon_mac=$(printf '%s\n' "$epon_mac" | sed 's/../&:/g; s/:$//')
+	fi
+
+	mkdir -p "$runstate"
+	chmod 0700 "$runstate"
+	if [ -n "$mode" ] || [ -n "$serial" ] || [ -n "$epon_mac" ]; then
+		pon_factory="$runstate/pon_factory"
+		echo "config pon 'pon'" > "$pon_factory"
+		[ -n "$mode" ] && \
+			echo "	option mode '$mode'" >> "$pon_factory"
+		[ -n "$serial" ] && \
+			echo "	option serial_number '$serial'" >> "$pon_factory"
+		[ -n "$epon_mac" ] && \
+			echo "	option onu_mac '$epon_mac'" >> "$pon_factory"
+		chmod 0600 "$pon_factory"
+	fi
+
+	if [ -f "$runtime/lan_mac" ]; then
+		read -r base_mac < "$runtime/lan_mac"
+		for device in /sys/class/net/lan[1-5]; do
+			[ -e "$device" ] || continue
+			# 接口已经 up（或已加入 br-lan）时改 MAC 会 EBUSY，属正常情况，
+			# 不能因此让 start() 返回非 0（rc=2 会被 procd 当成启动失败）。
+			ip link set dev "${device##*/}" address "$base_mac" 2>/dev/null || :
+		done
+	fi
+
+	return 0
+}

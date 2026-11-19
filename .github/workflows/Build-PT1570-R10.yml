@@ -1,0 +1,676 @@
+name: Build PT1570-R10 (rtl9617c FIT)
+
+# ================================================================
+# P3TERX/AN758X 模板风格的极简云编译：
+#   仓库只放"定制层"（diy-part1/2 + configs/ + files/ + scripts/），
+#   workflow 在 runner 上克隆上游源码 → 注入 → 配置 → 编译 → 发布。
+# ================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: '上游 commit / 分支。默认 = feature/pt1500-h10-openwrt-fixes @ 20b4cf4（2026-11-07，已真机核实的基线），一般不要改'
+        required: false
+        default: '20b4cf4490ca55cc406d07e391691efa8cd8a087'
+        type: string
+      target_model:
+        description: '选择要编译的机型（只产出所选机型的固件）。youhua_pt1570_r10=友华 PT1570-R10(默认/真机已验证)；tianyi_tyfza1_2p5g=天邑 TYFZA1 2.5G；tianyi_tyfza1_4ge=天邑 TYFZA1 4GE；youhua_pt1500_h10_2p5g=友华 PT1500-H10 2.5G（这三个为上游机型，未在本仓库真机验证）'
+        required: false
+        default: 'youhua_pt1570_r10'
+        type: choice
+        options:
+          - youhua_pt1570_r10
+          - tianyi_tyfza1_2p5g
+          - tianyi_tyfza1_4ge
+          - youhua_pt1500_h10_2p5g
+      upload_release:
+        description: '发布到 GitHub Release（固定 tag pt1570-r10，滚动覆盖）'
+        required: false
+        default: true
+        type: boolean
+      prune_release:
+        description: '上传后清理该 Release 里不属于本次产物的旧附件（只保留最新一次编译结果）'
+        required: false
+        default: true
+        type: boolean
+      build_initramfs:
+        description: '同时构建 initramfs 恢复镜像（救砖用，会多编一次内核，约 +8 分钟）'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pt1570-r10-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+  FORCE_UNSAFE_CONFIGURE: 1
+  BUILD_ROOT: /workdir
+  REPO_URL: https://github.com/lyq1996/rtl9617c-openwrt.git
+  # 锁定基线 20b4cf4490ca55cc406d07e391691efa8cd8a087 的出处（便于以后追溯）：
+  #   仓库/分支：lyq1996/rtl9617c-openwrt @ feature/pt1500-h10-openwrt-fixes（该分支 HEAD）
+  #   时间/作者：2026-11-07 19:45 +08，Leo
+  #   标题：pon: apply EPON queues per queue like stock
+  #   （epon_sla 由"整条 TCONT 重写"改为逐队列更新，对齐厂商固件行为）
+  #
+  # 为什么写完整 40 位 SHA：下面用 `git fetch --depth=1 origin "$SOURCE_REF"` 精确检出。
+  # 用分支名会随上游前进而漂移，镜像内容与缓存 key（pt1570-tc-<SOURCE_HASH>-…）都会失效。
+  #
+  # ⚠️ 不要改成 main / refactor：上游默认分支已切到 refactor（net 层 ni/fe 拆分的另一条线），
+  #    main 则停在 2026-10-29 的 cea9938。换线会与本仓库的 xram 端口映射、PON 默认值、
+  #    factory 284 补丁相互冲突，必须重新真机验证后才可换。
+  SOURCE_REF: ${{ github.event.inputs.source_ref || '20b4cf4490ca55cc406d07e391691efa8cd8a087' }}
+  # 本次要编译的机型（workflow_dispatch 下拉选择，diy-part2/校验/Release 全跟随它）
+  TARGET_MODEL: ${{ github.event.inputs.target_model || 'youhua_pt1570_r10' }}
+  # 注意：必须用 inputs.*（布尔上下文）。github.event.inputs.* 是字符串，
+  # 字符串 'true' == true 在 GitHub 表达式里按数值比较（'true'->NaN）恒为 false，
+  # 曾导致 Release 步骤永远被 skip。
+  UPLOAD_RELEASE: ${{ github.event.inputs.upload_release == 'true' && 'true' || 'false' }}
+  # Release 是"滚动"语义（tag 固定），而产物文件名带时间戳 ->
+  # softprops 只覆盖同名附件，旧的 *-squashfs-sysupgrade-<时间>.itb 会一直堆着。
+  # 这里在发布成功后按"本次产物清单"反删其余附件，保证 Release 里只有最新一套。
+  PRUNE_RELEASE: ${{ github.event.inputs.prune_release == 'true' && 'true' || 'false' }}
+  # 默认不编 initramfs-recovery：它要单独再编一遍内核，约多花 8 分钟。
+  # 需要救砖镜像时在 Run workflow 里勾上即可。
+  BUILD_INITRAMFS: ${{ github.event.inputs.build_initramfs == 'true' && 'true' || 'false' }}
+  # ccache：命中后 kernel / 用户态包基本不用重编，是最省时间的一层缓存。
+  # 目录由 rules.mk 决定：CONFIG_CCACHE_DIR 为空 -> $(TOPDIR)/.ccache，
+  # 也就是 <源码根>/.ccache（不是 staging_dir）。下面三处都缓存，兜住上游改默认值。
+  CCACHE_MAXSIZE: 1200M
+  CCACHE_COMPRESS: 'true'
+  CCACHE_NOHASHDIR: 'true'
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    name: FIT / rtl9617c / PT1570-R10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 480
+
+    steps:
+      - name: Checkout build assets
+        uses: actions/checkout@v5
+
+      - name: Normalize line endings (CRLF -> LF)
+        run: |
+          set -eu
+          n=0
+          while IFS= read -r -d '' f; do
+            if grep -q $'\r' "$f" 2>/dev/null; then
+              sed -i 's/\r$//' "$f"
+              n=$((n+1))
+            fi
+          done < <(find "$GITHUB_WORKSPACE" -name .git -prune -o -type f \
+              \( -name '*.sh' -o -name '*.py' -o -name '*.mk.inc' -o -name '*.mk' \
+                 -o -name '*.c' -o -name '*.h' -o -name '*.uc' \
+                 -o -name '*.dts' -o -name '*.dtsi' \
+                 -o -path '*/files/etc/*' \) -print0)
+          echo "LINE_ENDING_OK normalized=$n"
+
+      # =========================================================
+      # 1. 释放磁盘 + 编译环境（合并原两步）
+      # =========================================================
+      - name: Free disk space & install build dependencies
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /usr/share/swift
+          sudo docker image prune --all --force 2>/dev/null || true
+          sudo apt-get clean
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 8G /swapfile && sudo chmod 600 /swapfile
+          sudo mkswap /swapfile && sudo swapon /swapfile
+
+          sudo apt-get update -yqq
+          # 依赖清单与旧仓库一致（已在 ubuntu-24.04 跑通）
+          sudo apt-get install -y --no-install-recommends \
+            asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang clang-18 cmake cpio curl device-tree-compiler flex gawk \
+            gettext git g++-multilib gcc-multilib gperf help2man intltool \
+            libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev \
+            libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev \
+            libtool libyaml-dev lld lld-18 llvm llvm-18 ninja-build p7zip-full patch pkgconf \
+            python3 python3-docutils python3-pip python3-ply python3-pyelftools \
+            qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
+            uglifyjs unzip wget xmlto xxd zlib1g-dev zstd
+          # tyfza1-pon-control（Rust）交叉编译需要该 target std
+          if command -v rustup >/dev/null 2>&1; then
+            rustup target add aarch64-unknown-linux-musl
+          fi
+
+          sudo mkdir -p "$BUILD_ROOT"
+          sudo chown "$USER:$USER" "$BUILD_ROOT"
+          sudo timedatectl set-timezone "$TZ"
+          df -hT / "$BUILD_ROOT"; free -h
+
+      # =========================================================
+      # 2. 克隆上游源码
+      # =========================================================
+      - name: Clone source code
+        run: |
+          set -e
+          cd "$BUILD_ROOT"
+          git clone "$REPO_URL" --depth=1 openwrt
+          cd openwrt
+          # 优先按锁定的 commit 检出；失败回退到已验证分支。
+          # 该分支（feature/pt1500-h10-openwrt-fixes）的 HEAD 目前仍等于锁定 SHA，
+          # 所以回退拿到的是同一个提交；一旦上游推进了这个分支，回退就不再等价，
+          # 届时日志里会出现上面的 warning，需要重新核对后再定新的锁定值。
+          if ! git fetch -q --depth=1 origin "$SOURCE_REF"; then
+            echo "::warning::按 commit 拉取失败，回退 feature/pt1500-h10-openwrt-fixes"
+            git fetch -q --depth=1 origin feature/pt1500-h10-openwrt-fixes
+            echo "SOURCE_REF=feature/pt1500-h10-openwrt-fixes" >> "$GITHUB_ENV"
+          fi
+          git checkout -q FETCH_HEAD
+          echo "SOURCE_HASH=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          ln -sfn "$BUILD_ROOT/openwrt" "$GITHUB_WORKSPACE/openwrt"
+
+          test -f target/linux/rtl9617c/image/Makefile
+          test -f target/linux/rtl9617c/dts/rtl9617c-tyfza1.dtsi
+          echo "source: $(git rev-parse HEAD)"
+
+      # =========================================================
+      # 3. 缓存：dl（源码包）+ toolchain/host（工具链）+ ccache + feeds
+      #
+      #    冷编译 ≈ 55 分钟，其中工具链 10~12 分钟、内核+包 25 分钟。
+      #    工具链 / ccache / feeds 三层都带上 SOURCE_HASH 与"配置指纹"：
+      #      * 源码锁死时几乎必命中 -> 直接跳过工具链重编；
+      #      * 源码或 diy/config 一变就换 key -> 绝不拿旧工具链编新代码。
+      #    所有缓存都 continue-on-error：命中不了就退回全量编译，不会让构建失败。
+      # =========================================================
+      - name: Resolve cache key
+        id: resolve
+        run: |
+          echo "week=$(date +%Y%W)" >> "$GITHUB_OUTPUT"
+          # 配置指纹：diy 脚本 / .config / 校验脚本任一变化都要换 key
+          fp=$( { cat configs/*.config; sha256sum diy-part1.sh diy-part2.sh scripts/*; } \
+                | sha256sum | cut -c1-12 )
+          echo "cfg=$fp" >> "$GITHUB_OUTPUT"
+          echo "cache cfg=$fp source=$SOURCE_HASH week=$(date +%Y%W)"
+
+      - name: Restore dl cache
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: ${{ env.BUILD_ROOT }}/openwrt/dl
+          key: pt1570-r10-dl-${{ steps.resolve.outputs.week }}
+          restore-keys: pt1570-r10-dl-
+
+      # 工具链 + host 工具：这两块是"每次都要重来"的固定开销，
+      # 缓存后 make 会直接复用 staging_dir 里的二进制与 stamp，跳过重编。
+      - name: Restore toolchain & host tools cache
+        id: tc_restore
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: |
+            ${{ env.BUILD_ROOT }}/openwrt/staging_dir/host
+            ${{ env.BUILD_ROOT }}/openwrt/staging_dir/toolchain-*
+            ${{ env.BUILD_ROOT }}/openwrt/build_dir/toolchain-*
+          key: pt1570-tc-${{ env.SOURCE_HASH }}-${{ steps.resolve.outputs.cfg }}
+          restore-keys: |
+            pt1570-tc-${{ env.SOURCE_HASH }}-
+
+      # ccache：内容寻址，配置只改 rootfs 时命中率极高（kernel / wpad / luci 都命中）
+      - name: Restore ccache
+        id: ccache_restore
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: |
+            ${{ env.BUILD_ROOT }}/openwrt/.ccache
+            ${{ env.BUILD_ROOT }}/openwrt/staging_dir/ccache
+            ~/.ccache
+          key: pt1570-ccache-${{ env.SOURCE_HASH }}-${{ steps.resolve.outputs.cfg }}
+          restore-keys: |
+            pt1570-ccache-${{ env.SOURCE_HASH }}-
+
+      # feeds：整目录缓存，命中后 feeds update 只做增量 pull（几十秒）
+      - name: Restore feeds cache
+        id: feeds_restore
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: ${{ env.BUILD_ROOT }}/openwrt/feeds
+          key: pt1570-feeds-${{ env.SOURCE_HASH }}
+          restore-keys: pt1570-feeds-
+
+      # =========================================================
+      # 4. feeds → diy-part1 → files → diy-part2
+      # =========================================================
+      - name: Update and install feeds
+        working-directory: ${{ env.BUILD_ROOT }}/openwrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          # Windows/9p 同步过的 feed 权限必须收敛，rpcd 拒绝 world-writable handler
+          chmod -R go-w feeds/luci feeds/packages 2>/dev/null || true
+          find feeds/luci -path '*/root/usr/share/rpcd/ucode/*' -type f -exec chmod 0755 {} + 2>/dev/null || true
+          find feeds/luci -path '*/root/usr/share/rpcd/acl.d/*.json' -type f -exec chmod 0644 {} + 2>/dev/null || true
+
+      - name: Run diy-part1.sh (board + wifi driver + upstream patches)
+        working-directory: ${{ env.BUILD_ROOT }}/openwrt
+        env:
+          ASSETS: ${{ github.workspace }}
+          DTS_STATUS: verified
+        run: bash "$GITHUB_WORKSPACE/diy-part1.sh"
+
+      - name: Save feeds cache
+        if: steps.feeds_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: ${{ env.BUILD_ROOT }}/openwrt/feeds
+          key: pt1570-feeds-${{ env.SOURCE_HASH }}
+
+      - name: Apply custom rootfs files
+        run: |
+          set -e
+          cp -a "$GITHUB_WORKSPACE/files" "$BUILD_ROOT/openwrt/files"
+          # 关键：Git 仓库里的权限位不可靠（网页上传一律 100644），
+          # /etc/init.d 下的脚本丢了 +x 就永远不会执行——tyfza1-factory 不执行
+          # => 校准文件没生成 => 驱动 request_firmware -2 => 无线全无（2026-11-14 真机定位）。
+          # 这里对所有需要执行的脚本统一补 0755，不依赖仓库里的 mode。
+          find "$BUILD_ROOT/openwrt/files/etc/init.d" \
+               "$BUILD_ROOT/openwrt/files/etc/uci-defaults" \
+               -type f -exec chmod 0755 {} + 2>/dev/null || true
+          find "$BUILD_ROOT/openwrt/files" -name '*.sh' -type f -exec chmod 0755 {} + 2>/dev/null || true
+          # 兜底断言：init.d 里没有可执行脚本就说明上面的 chmod 没生效，直接失败。
+          n_exec=$(find "$BUILD_ROOT/openwrt/files/etc/init.d" -type f -perm -u+x | wc -l)
+          [ "$n_exec" -ge 1 ] || { echo "::error::files/etc/init.d 下没有可执行脚本，rootfs 脚本不会运行"; exit 1; }
+          echo "custom rootfs files: $(find "$GITHUB_WORKSPACE/files" -type f | wc -l) 个，init.d 可执行 $n_exec 个"
+
+      - name: Load config & run diy-part2.sh (defaults + assertions)
+        working-directory: ${{ env.BUILD_ROOT }}/openwrt
+        env:
+          ASSETS: ${{ github.workspace }}
+          TARGET_MODEL: ${{ env.TARGET_MODEL }}
+          BUILD_INITRAMFS: ${{ env.BUILD_INITRAMFS }}
+        run: |
+          set -e
+          rm -f .config
+          # 基础配置机型无关；具体编哪个机型由 TARGET_MODEL 在 diy-part2.sh 里定
+          cat "$GITHUB_WORKSPACE/configs/youhua_pt1570-r10.config" >> .config
+          bash "$GITHUB_WORKSPACE/diy-part2.sh"
+
+      # 射频表与驱动解析器强耦合，格式差一个空列真机就会 -EINVAL。
+      # 编译前用 Python 逐字段模拟驱动解析器，任何一张表过不去立即失败。
+      - name: Verify WiFi RF tables
+        run: |
+          set -e
+          T="$GITHUB_WORKSPACE/files/lib/firmware/realtek/tyfza1"
+          n=$(find "$T" -name '*.txt' | wc -l)
+          [ "$n" = 42 ] || { echo "::error::射频表数量 $n != 42"; exit 1; }
+          python3 "$GITHUB_WORKSPACE/scripts/verify-rf-tables.py" "$T"
+          echo "RF_TABLES_OK=True files=$n"
+
+      - name: Run static preflight
+        working-directory: ${{ github.workspace }}
+        env:
+          ASSETS: ${{ github.workspace }}
+          WRT: ${{ env.BUILD_ROOT }}/openwrt
+        run: bash "$GITHUB_WORKSPACE/scripts/preflight.sh"
+
+      # =========================================================
+      # 5. 编译
+      # =========================================================
+      - name: Download sources
+        working-directory: ${{ env.BUILD_ROOT }}/openwrt
+        run: |
+          make package/base-files/clean >/dev/null 2>&1 || true
+          # 下载是网络瓶颈，并发开得比核数大得多才有意义
+          make download -j"$(( $(nproc) * 4 ))"
+
+      - name: Compile the firmware
+        id: compile
+        working-directory: ${{ env.BUILD_ROOT }}/openwrt
+        run: |
+          set -o pipefail
+          LOG="$GITHUB_WORKSPACE/build.log"
+          : > "$LOG"
+          # 4 核 runner 上 -j4 经常在链接阶段空等，-j6 更贴合 16GB/4vCPU（实测约快 10%）
+          JOBS=$(( $(nproc) + 2 ))
+          echo "make -j$JOBS (nproc=$(nproc))"
+          if make -j"$JOBS" 2>&1 | tee -a "$LOG"; then
+            echo "PARALLEL_BUILD_OK=True"
+          elif make -j1 V=s 2>&1 | tee -a "$LOG"; then
+            echo "SERIAL_BUILD_OK=True"
+          else
+            echo "::group::BUILD FAILED - last 120 lines"
+            tail -n 120 "$LOG"
+            echo "::endgroup::"
+            grep -E 'Error [0-9]|^make(\[[0-9]+\])?: \*\*\*|error:|No such file|No space left|Killed|undefined reference' "$LOG" \
+              | tail -n 8 | tr -d '\r' | while IFS= read -r l; do echo "::error::${l//%/%25}"; done
+            exit 1
+          fi
+          # ccache 命中率直接决定下次能快多少，打进日志方便复盘
+          if command -v ccache >/dev/null 2>&1; then
+            echo "::group::ccache stats"
+            ccache -s 2>/dev/null | head -14 || true
+            echo "::endgroup::"
+          fi
+          echo "status=success" >> "$GITHUB_OUTPUT"
+          df -hT /
+
+      - name: Save dl cache
+        if: success()
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: ${{ env.BUILD_ROOT }}/openwrt/dl
+          key: pt1570-r10-dl-${{ steps.resolve.outputs.week }}
+
+      # 工具链/ccache 只在"没命中"时上传：命中过就不必再压一遍（cache 不可覆盖）
+      - name: Save toolchain & host tools cache
+        if: steps.compile.outputs.status == 'success' && steps.tc_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: |
+            ${{ env.BUILD_ROOT }}/openwrt/staging_dir/host
+            ${{ env.BUILD_ROOT }}/openwrt/staging_dir/toolchain-*
+            ${{ env.BUILD_ROOT }}/openwrt/build_dir/toolchain-*
+          key: pt1570-tc-${{ env.SOURCE_HASH }}-${{ steps.resolve.outputs.cfg }}
+
+      - name: Save ccache
+        if: steps.compile.outputs.status == 'success' && steps.ccache_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: |
+            ${{ env.BUILD_ROOT }}/openwrt/.ccache
+            ${{ env.BUILD_ROOT }}/openwrt/staging_dir/ccache
+            ~/.ccache
+          key: pt1570-ccache-${{ env.SOURCE_HASH }}-${{ steps.resolve.outputs.cfg }}
+
+      # =========================================================
+      # 6. 产物校验：files/ 逐文件比对 rootfs + sysupgrade 可启动性
+      # =========================================================
+      - name: Verify image payload (wifi firmware + RF tables + factory)
+        working-directory: ${{ env.BUILD_ROOT }}/openwrt
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, sys
+          assets = pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "files"
+          roots = list(pathlib.Path(".").glob("build_dir/target-*/root-rtl9617c*"))
+          if not roots:
+              sys.exit("ERROR: 找不到 build_dir/target-*/root-rtl9617c*")
+          root = roots[0]
+          files = [p for p in assets.rglob("*") if p.is_file()]
+          missing = []
+          for f in files:
+              rel = f.relative_to(assets)
+              tgt = root / rel
+              if not tgt.exists():
+                  missing.append(("MISSING", str(rel)))
+              elif tgt.read_bytes() != f.read_bytes():
+                  missing.append(("MISMATCH", str(rel)))
+          nbin = sum(1 for f in files if f.suffix == ".bin")
+          ntxt = sum(1 for f in files if f.suffix == ".txt")
+          print(f"payload check: {len(files)} files (bin={nbin}, txt={ntxt})")
+          if missing:
+              for kind, rel in missing[:20]:
+                  print(f"::error::{kind}: {rel}")
+              sys.exit(f"ERROR: {len(missing)} 个文件缺失或不符（WiFi 固件/射频表未进镜像）")
+
+          # 校准提取尺寸断言：驱动按 sizeof(struct rtl_ax_board_cal)=284 严格校验，
+          # 4096 整块提取会让 probe 直接 -EINVAL（真机已验证，这次无线全无的根因）。
+          # 防止旧版脚本混进镜像：284 必须在，4096 提取绝不允许出现。
+          script = (root / "etc/init.d/tyfza1-factory").read_text(encoding="utf-8", errors="replace")
+          for off, chip in (("0x2000", "rtl8852ce/5G"), ("0x3000", "rtl8192xbe/2.4G")):
+              if f"factory_blob $(({off})) 284" not in script:
+                  sys.exit(f"ERROR: tyfza1-factory 里 {chip} 校准不是 284 字节提取（{off}），旧版脚本？")
+          if "factory_blob $((" in script and ") 4096" in script:
+              sys.exit("ERROR: tyfza1-factory 仍含 4096 整块提取（会 -EINVAL，驱动只认 284）")
+          print("FACTORY_284_OK=True")
+          bad_perm = []
+          for f in files:
+              rel = str(f.relative_to(assets))
+              if not rel.startswith(("etc/init.d/", "etc/uci-defaults/")):
+                  continue
+              tgt = root / rel
+              # 用权限位判断（CI 是 Linux；用 os.access 在 root 下对 644 也会返回
+              # True，会漏掉要抓的情况）。非 POSIX 环境（本地 Windows 预演）跳过。
+              if os.name == "posix" and not (tgt.stat().st_mode & 0o111):
+                  bad_perm.append(f"{rel} (mode {oct(tgt.stat().st_mode & 0o777)})")
+          if bad_perm:
+              for rel in bad_perm:
+                  print(f"::error::NOT_EXECUTABLE: {rel}")
+              sys.exit(f"ERROR: {len(bad_perm)} 个注入的 rootfs 脚本没有执行权限，首启不会运行")
+          print(f"ROOTFS_EXEC_OK=True (perm check {'enforced' if os.name == 'posix' else 'skipped: non-posix'})")
+
+          print("PAYLOAD_OK=True")
+          PY
+
+      - name: Verify sysupgrade bootability (FIT structure + fit0 bootargs)
+        working-directory: ${{ env.BUILD_ROOT }}/openwrt
+        run: |
+          set -e
+          # 按本次选择的机型精确匹配：defconfig 后只应有 1 个机型，
+          # 用变量而不是写死，保证与 diy-part2 的 TARGET_MODEL 一致。
+          ITB=$(find bin/targets -name "*${TARGET_MODEL}-squashfs-sysupgrade.itb" | head -1)
+          [ -n "$ITB" ] || {
+            echo "::error::未找到 ${TARGET_MODEL} 的 squashfs-sysupgrade.itb（产出的机型不对？）"
+            find bin/targets -name '*.itb' || true
+            exit 1
+          }
+          python3 "$GITHUB_WORKSPACE/scripts/verify-fit-boot.py" "$ITB"
+          echo "FIT_BOOT_OK=True $ITB"
+
+      # =========================================================
+      # 7. 整理产物 + 时间戳 + 发布
+      # =========================================================
+      - name: Organize files
+        id: organize
+        if: steps.compile.outputs.status == 'success'
+        run: |
+          cd "$BUILD_ROOT"/openwrt/bin/targets/*/*
+          rm -rf packages
+          # 防御：若其它机型仍被构建出来，产物里会混入非所选机型的 itb，
+          # 用户极易刷错。只保留 TARGET_MODEL 的产物，其余一律丢弃。
+          for f in *; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              *"${TARGET_MODEL}"*) continue ;;
+              *youhua_pt1570_r10*|*tianyi_tyfza1_2p5g*|*tianyi_tyfza1_4ge*|*youhua_pt1500_h10_2p5g*)
+                echo "drop 非所选机型($TARGET_MODEL)产物: $f"; rm -f -- "$f" ;;
+            esac
+          done
+          echo "FIRMWARE=$PWD" >> "$GITHUB_ENV"
+          echo "status=success" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp firmware filenames with build time
+        if: steps.organize.outputs.status == 'success'
+        run: |
+          cd "$FIRMWARE"
+          NOW=$(date '+%Y-%m-%d %H:%M:%S')
+          # 文件名时间戳用 Windows 安全格式：不带冒号/括号。
+          # （GitHub 下载 zip 在 Windows 上解压时，文件名含 ':' 会被拒绝或改名。）
+          # 可读时间只写进 Release 说明与 BUILD_INFO。
+          TS=$(date '+%Y%m%d-%H%M')
+          echo "FW_TS=${NOW} (Shanghai)" >> "$GITHUB_ENV"
+          renamed=0
+          for f in *; do
+            [ -f "$f" ] || continue
+            case "$f" in sha256sums*|profiles.json|*.buildinfo) continue ;; esac
+            case "$f" in
+              *-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9].*)
+                continue ;;  # 幂等护栏
+            esac
+            ext=".${f##*.}"
+            case "$ext" in .gz) case "$f" in *.img.gz) ext=".img.gz" ;; *.tar.gz) ext=".tar.gz" ;; esac ;; esac
+            mv -f -- "$f" "${f%$ext}-${TS}${ext}"
+            renamed=$((renamed+1))
+          done
+          rm -f sha256sums
+          sha256sum * > sha256sums 2>/dev/null || true
+          echo "已改名 $renamed 个文件，时间戳 ${TS}"
+          ls -la
+
+      - name: Upload firmware artifact
+        if: steps.organize.outputs.status == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pt1570-fit-${{ env.TARGET_MODEL }}
+          path: ${{ env.FIRMWARE }}
+          retention-days: 30
+
+      # 单固件 artifact：只含刷机用的那一个 sysupgrade.itb（时间戳文件名）。
+      # 注意 GitHub 下载 artifact 时仍会套一层 zip，解压后即裸 itb；
+      # Release（tag 见 Generate release）里的 itb 是真正的不打包单文件。
+      - name: Upload firmware artifact (single sysupgrade.itb)
+        if: steps.organize.outputs.status == 'success'
+        # 这只是便利产物：找不到文件不应该让整个 job 失败（否则后面 Release 全被跳过）。
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: sysupgrade-itb-${{ env.TARGET_MODEL }}
+          # 名字已被 Stamp 改成 *-squashfs-sysupgrade-<YYYYMMDD-HHMM>.itb，
+          # 所以结尾必须用 *，不能写死成 -squashfs-sysupgrade.itb（旧写法永远匹配不到）。
+          path: ${{ env.FIRMWARE }}/*${{ env.TARGET_MODEL }}-squashfs-sysupgrade*.itb
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload build log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pt1570-r10-build-log
+          path: build.log
+          retention-days: 14
+
+      - name: Generate release
+        id: tag
+        if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success'
+        run: |
+          if [ -z "$FIRMWARE" ] || [ -z "$(ls -A "$FIRMWARE" 2>/dev/null)" ]; then
+            echo "::warning::固件目录为空，跳过 Release"; exit 0
+          fi
+          # 按机型固定 tag（滚动覆盖）：去掉厂商前缀、下划线转连字符
+          # youhua_pt1570_r10 -> pt1570-r10 | tianyi_tyfza1_2p5g -> tyfza1-2p5g
+          # tianyi_tyfza1_4ge -> tyfza1-4ge  | youhua_pt1500_h10_2p5g -> pt1500-h10-2p5g
+          RELEASE_TAG="${TARGET_MODEL#*_}"
+          RELEASE_TAG="${RELEASE_TAG//_/-}"
+          {
+            echo "## ${TARGET_MODEL} 自动编译固件（UBI）"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "|---|---|"
+            echo "| 机型 | \`${TARGET_MODEL}\` |"
+            echo "| 源码 | lyq1996/rtl9617c-openwrt @ \`${SOURCE_HASH}\` |"
+            echo "| 编译时间 | ${FW_TS:-$(date '+%Y-%m-%d %H:%M:%S')} (Shanghai) |"
+            echo ""
+            echo '```'
+            (cd "$FIRMWARE" && sha256sum * 2>/dev/null | grep -v sha256sums)
+            echo '```'
+            echo ""
+            echo "> 刷入请用 \`*-squashfs-sysupgrade.itb\`（不要用 initramfs-recovery，"
+            echo "> 那是内存态恢复镜像，重启即失）。启动串口出现"
+            echo "> \`mapped 1 uImage.FIT filesystem sub-image as /dev/fit0\` 即为正常。"
+            echo ""
+            echo "> 本 Release 为滚动发布：每次编译完成后会删除不属于本次产物的旧附件，"
+            echo "> 只保留最新一次结果。需要旧版本请到 Actions 对应 run 的 Artifacts 下载"
+            echo "> （保留 30 天），或用旧的 commit 重新编译。"
+          } >> release.txt
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "status=success" >> "$GITHUB_OUTPUT"
+
+      # 先记下"本次产物清单"，上传成功后再按它反删其余附件。
+      # 顺序刻意是「先传后删」：万一上传失败，旧产物仍在，不会出现空 Release。
+      - name: Record release asset whitelist
+        id: keep
+        if: steps.tag.outputs.status == 'success'
+        run: |
+          set -eu
+          keep="$RUNNER_TEMP/release-keep.txt"
+          : > "$keep"
+          for f in "$FIRMWARE"/*; do
+            [ -f "$f" ] && basename "$f" >> "$keep"
+          done
+          sort -o "$keep" "$keep"
+          echo "本次产物 $(grep -c . "$keep" || true) 个："
+          cat "$keep"
+          echo "path=$keep" >> "$GITHUB_OUTPUT"
+
+      - name: Upload firmware to release
+        uses: softprops/action-gh-release@v2
+        if: steps.tag.outputs.status == 'success'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.release_tag }}
+          name: ${{ env.TARGET_MODEL }} UBI (rolling)
+          body_path: release.txt
+          make_latest: true
+          files: ${{ env.FIRMWARE }}/*
+          fail_on_unmatched_files: false
+
+      # 删除 Release 里不属于本次产物的旧附件（旧时间戳的 .itb 等）。
+      # 三道护栏，宁可不删也不误删：
+      #   1) 清单为空/不存在 -> 直接跳过（否则 grep 失败会被当成"不匹配"而删光）
+      #   2) 待删数 == 现有总数 -> 说明清单与附件完全不相交，多半是解析异常，中止
+      #   3) 单个删除失败只 warning：清理是"锦上添花"，不能把已成功的发布判成失败
+      - name: Prune stale release assets
+        if: steps.tag.outputs.status == 'success' && env.PRUNE_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.release_tag }}
+          KEEP: ${{ steps.keep.outputs.path }}
+        run: |
+          set -eu
+          if [ -z "${KEEP:-}" ] || [ ! -s "$KEEP" ]; then
+            echo "::warning::本次产物清单为空，跳过清理（避免误删全部附件）"; exit 0
+          fi
+          if ! gh release view "$TAG" --json assets --jq '.assets[].name' > "$RUNNER_TEMP/have.txt" 2>/dev/null; then
+            echo "::warning::读取 Release $TAG 的附件列表失败，跳过清理"; exit 0
+          fi
+          TOTAL=$(grep -c . "$RUNNER_TEMP/have.txt" || true)
+          KEPT=$(grep -c . "$KEEP" || true)
+          echo "Release $TAG 现有附件 $TOTAL 个，本次清单 $KEPT 个"
+
+          # 先算出待删清单，做"完全不相交"的兜底判断，再动手删
+          : > "$RUNNER_TEMP/stale.txt"
+          MATCH=0
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            if grep -Fqx -- "$name" "$KEEP"; then
+              MATCH=$((MATCH+1))
+            else
+              printf '%s\n' "$name" >> "$RUNNER_TEMP/stale.txt"
+            fi
+          done < "$RUNNER_TEMP/have.txt"
+          STALE=$(grep -c . "$RUNNER_TEMP/stale.txt" || true)
+
+          if [ "$TOTAL" -gt 0 ] && [ "$MATCH" -eq 0 ]; then
+            echo "::warning::清单与现有附件零交集（stale=$STALE/$TOTAL），疑似解析异常，中止清理"
+            exit 0
+          fi
+
+          REMOVED=0
+          FAILED=0
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            if gh release delete-asset "$TAG" "$name" --yes >/dev/null 2>&1; then
+              echo "removed: $name"; REMOVED=$((REMOVED+1))
+            else
+              echo "::warning::删除附件失败: $name"
+              FAILED=$((FAILED+1))
+            fi
+          done < "$RUNNER_TEMP/stale.txt"
+          echo "PRUNE_OK tag=$TAG before=$TOTAL kept=$KEPT stale=$STALE removed=$REMOVED failed=$FAILED"
+          {
+            echo "### Release 清理"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "|---|---|"
+            echo "| tag | \`$TAG\` |"
+            echo "| 清理前附件 | $TOTAL |"
+            echo "| 本次保留 | $KEPT |"
+            echo "| 已删除旧附件 | $REMOVED |"
+            echo "| 删除失败 | $FAILED |"
+          } >> "$GITHUB_STEP_SUMMARY"

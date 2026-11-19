@@ -1,0 +1,58 @@
+#!/bin/sh
+# PT1570-R10：2.4G / 5G 断流缓解
+#
+# 2026-11-16 起无线协议（htmode）与信道全部交还驱动能力推导（与原厂一致，
+# 见 97 号脚本头部说明），本脚本只保留与"推导"无关的两类断流对策：
+#
+#   1) hostapd 默认会轮询空闲终端（inactivity poll）：手机/平板进省电模式后
+#      漏掉几次轮询，就被 deauth（logread 里能看到 "did not acknowledge" /
+#      "inactive"）。表现为"连着连着就掉线、要手动重连"。
+#      对策：skip_inactivity_poll=1（不再主动轮询空闲终端）+
+#            disassoc_low_ack=0（不因低 ACK 主动踢人，由终端自己决定重连）。
+#   2) 所有 radio 统一 country=CN（原厂 92 号脚本同款行为，功率表/信道合法性）。
+#
+# 5G 信道交还推导后为 auto：驱动注册的 5G 信道表含 DFS 信道（52-64/100-144），
+# 雷达误报可能触发信道切换。若真机出现"5G 所有终端同时掉一下再恢复"，
+# 在 LuCI（网络→无线→编辑）把 5G 信道手动固定到 149（CN 合法、非 DFS）。
+#
+# uci-defaults 只在首启（或改配置后）跑一次；刷机"保留配置"不会重新生成
+# /etc/config/wireless，此时需要手动改或恢复出厂。
+
+log() { logger -t wifi-stability "$@"; }
+
+# 首启顺序上本脚本可能早于 wifi config —— 没有配置就先手动生成一次
+if [ ! -f /etc/config/wireless ]; then
+	command -v wifi >/dev/null 2>&1 && wifi config >/dev/null 2>&1
+fi
+if [ ! -f /etc/config/wireless ]; then
+	log "未找到 /etc/config/wireless，跳过"
+	exit 0
+fi
+
+changed=0
+
+# ---- 1. 所有 radio：统一国家码 CN（与原厂 92 号脚本一致） ----
+for dev in $(uci -q show wireless | sed -n 's/^wireless\.\([A-Za-z0-9_]*\)=wifi-device$/\1/p'); do
+	if [ "$(uci -q get "wireless.$dev.country")" != "CN" ]; then
+		uci -q set "wireless.$dev.country=CN"
+		log "$dev: country=CN"
+		changed=1
+	fi
+done
+
+# ---- 2. 所有 VAP：不踢空闲终端（断流主对策） ----
+for vif in $(uci -q show wireless | sed -n 's/^wireless\.\([A-Za-z0-9_]*\)=wifi-iface$/\1/p'); do
+	uci -q set "wireless.$vif.skip_inactivity_poll=1"
+	uci -q set "wireless.$vif.disassoc_low_ack=0"
+	changed=1
+	log "$vif: skip_inactivity_poll=1 disassoc_low_ack=0"
+done
+
+if [ "$changed" = "1" ]; then
+	uci -q commit wireless
+	log "已提交 wireless 配置"
+	wifi reload >/dev/null 2>&1 || true
+fi
+
+# uci-defaults 由 /etc/init.d/boot 用 "." 载入，这里必须 exit 0 而不是 return
+exit 0

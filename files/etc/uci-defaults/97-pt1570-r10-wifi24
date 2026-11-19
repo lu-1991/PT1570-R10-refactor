@@ -1,0 +1,77 @@
+#!/bin/sh
+# PT1570-R10：2.4G 首启兜底（country / 启用 / 不隐藏）
+#
+# 2026-11-16 起，无线协议（htmode）与信道**不再钉死**，完全交还驱动能力推导，
+# 与原厂固件行为一致（已对比原厂 rootfs 的 /lib/wifi/mac80211.uc，逐行相同）：
+#   - 驱动宣称 HE（2G/5G 都宣称）-> 2G 推导为 HE20、5G 为 HE80
+#   - 驱动无 EHT 能力，推导永远不会选到 EHT
+#
+# 历史（2026-11-14）：此脚本曾把 2.4G 的 htmode 固定为纯 802.11n、信道固定为
+# 第 6 信道，起因是"Windows 能搜到 2.4G、手机搜不到"，当时判定为 HE 信标兼容性。
+# 该判定未经真机复验（钉死后的固件从未刷机测试），且原厂同样推导出 HE20，
+# 故按用户决定恢复原厂行为。若刷机后手机仍搜不到 2.4G，可在 LuCI
+# （网络→无线→编辑）把 2.4G 的 htmode 手动改为 HT20 再观察。
+#
+# 本脚本只兜三件事（原厂 92 号脚本只补 country，这里按 R10 实际需要多兜启用）：
+#   1. country=CN（149/80MHz 合法功率表、5G/2G 都需要）
+#   2. wifi-iface 启用
+#   3. SSID 不隐藏
+# 只碰 2.4G（band=2g / hwmode=11g），5G 与 6G 完全不动。
+# uci-defaults 脚本执行后由系统删除，不会每次开机都覆盖用户的修改。
+
+log() { logger -t wifi-24g "$@"; }
+
+# 首启顺序上本脚本可能早于 wifi config —— 没有配置就先手动生成一次
+if [ ! -f /etc/config/wireless ]; then
+	command -v wifi >/dev/null 2>&1 && wifi config >/dev/null 2>&1
+fi
+if [ ! -f /etc/config/wireless ]; then
+	log "未找到 /etc/config/wireless，跳过"
+	exit 0
+fi
+
+# 判定某个 radio 是否 2.4G：优先看 band；老配置没有 band 时才看 hwmode
+is_24g() {
+	local band hwmode
+	band="$(uci -q get "wireless.$1.band" 2>/dev/null)"
+	if [ -n "$band" ]; then
+		[ "$band" = "2g" ]
+		return $?
+	fi
+	hwmode="$(uci -q get "wireless.$1.hwmode" 2>/dev/null)"
+	[ "$hwmode" = "11g" ]
+}
+
+changed=0
+
+# ---- 1. 频段设备：统一国家码 CN ----
+for dev in $(uci -q show wireless | sed -n 's/^wireless\.\([A-Za-z0-9_]*\)=wifi-device$/\1/p'); do
+	is_24g "$dev" || continue
+	if [ "$(uci -q get "wireless.$dev.country")" != "CN" ]; then
+		uci -q set "wireless.$dev.country=CN"
+		log "$dev: 2.4G country=CN"
+		changed=1
+	fi
+done
+
+# ---- 2. 2.4G 的 VAP 必须启用且不隐藏（否则手机列表里同样看不到） ----
+for vif in $(uci -q show wireless | sed -n 's/^wireless\.\([A-Za-z0-9_]*\)=wifi-iface$/\1/p'); do
+	dev="$(uci -q get "wireless.$vif.device" 2>/dev/null)"
+	[ -n "$dev" ] || continue
+	is_24g "$dev" || continue
+	uci -q set "wireless.$vif.disabled=0"
+	uci -q set "wireless.$vif.hidden=0"
+	changed=1
+done
+
+if [ "$changed" = "1" ]; then
+	uci -q commit wireless
+	log "已提交 wireless 配置"
+	# 首启时 wifi 服务通常还没起，reload 失败不影响后续开机流程
+	wifi reload >/dev/null 2>&1 || true
+else
+	log "未找到 2.4G radio，未做任何修改"
+fi
+
+# uci-defaults 由 /etc/init.d/boot 用 "." 载入，这里必须 exit 0 而不是 return
+exit 0

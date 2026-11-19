@@ -1,3 +1,17 @@
-openwrt/
+# 编译过程产物 / 本地缓存（只有本仓库的"定制层"需要进版本库）
+Config-final.txt
 build.log
-artifacts/
+release.txt
+wrt/
+openwrt/
+dl/
+*.itb
+*.bin.gz
+__pycache__/
+*.pyc
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
