@@ -280,6 +280,22 @@ if [ -n "$WF" ] && [ -f "$WF" ]; then
   [ "${#ref_input}" -eq 40 ] \
     && ok "上游锁定为完整 40 位 SHA（字节级可复现）" \
     || bad "上游锁定不是完整 40 位 SHA，无法保证可复现"
+
+  # 双基线护栏（用户指定）：基线必须是 refactor，且必须保留 20b4cf4 硬件层叠加。
+  # 回归点：只 clone refactor 不叠加 -> 缺 WiFi/USB/LED/4GE 驱动，编出的固件残废；
+  #         改回纯 20b4cf4 -> 违背用户"用 refactor"的要求。
+  grep -qE "default: 'ae4aeac45a70be1bdf68af65cbbacb360f201b27'" "$WF" \
+    && ok "克隆基线为 refactor @ ae4aeac（用户指定）" \
+    || bad "克隆基线不是 refactor @ ae4aeac"
+  grep -q "HARDWARE_REF: '20b4cf4490ca55cc406d07e391691efa8cd8a087'" "$WF" \
+    && grep -q 'rm -rf target/linux/rtl9617c' "$WF" \
+    && grep -q 'git checkout -q "$HW_REF" -- target/linux/rtl9617c' "$WF" \
+    && grep -q 'git checkout -q "$HW_REF" -- \\' "$WF" \
+    && ok "保留 20b4cf4 硬件层叠加（target 整树 + 包）" \
+    || bad "缺 20b4cf4 硬件层叠加，refactor 单独编不出完整固件"
+  grep -q 'SOURCE_HASH=${BASE_HASH}-${HW_HASH}' "$WF" \
+    && ok "缓存 key 同时绑定基线与硬件层" \
+    || bad "缓存 key 未绑定双基线，换线后可能拿旧缓存编新组合"
 else
   bad "没有 workflow 可检查"
 fi

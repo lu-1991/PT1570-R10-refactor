@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: '上游 commit / 分支。默认 = feature/pt1500-h10-openwrt-fixes @ 20b4cf4（2026-11-07，已真机核实的基线），一般不要改'
+        description: '上游基线 commit / 分支。默认 = refactor @ ae4aeac（用户指定基线）；硬件层会自动叠加 20b4cf4，一般不要改'
         required: false
-        default: '20b4cf4490ca55cc406d07e391691efa8cd8a087'
+        default: 'ae4aeac45a70be1bdf68af65cbbacb360f201b27'
         type: string
       target_model:
         description: '选择要编译的机型（只产出所选机型的固件）。youhua_pt1570_r10=友华 PT1570-R10(默认/真机已验证)；tianyi_tyfza1_2p5g=天邑 TYFZA1 2.5G；tianyi_tyfza1_4ge=天邑 TYFZA1 4GE；youhua_pt1500_h10_2p5g=友华 PT1500-H10 2.5G（这三个为上游机型，未在本仓库真机验证）'
@@ -52,19 +52,20 @@ env:
   FORCE_UNSAFE_CONFIGURE: 1
   BUILD_ROOT: /workdir
   REPO_URL: https://github.com/lyq1996/rtl9617c-openwrt.git
-  # 锁定基线 20b4cf4490ca55cc406d07e391691efa8cd8a087 的出处（便于以后追溯）：
-  #   仓库/分支：lyq1996/rtl9617c-openwrt @ feature/pt1500-h10-openwrt-fixes（该分支 HEAD）
-  #   时间/作者：2026-11-07 19:45 +08，Leo
-  #   标题：pon: apply EPON queues per queue like stock
-  #   （epon_sla 由"整条 TCONT 重写"改为逐队列更新，对齐厂商固件行为）
-  #
-  # 为什么写完整 40 位 SHA：下面用 `git fetch --depth=1 origin "$SOURCE_REF"` 精确检出。
+  # ===== 双基线：refactor（用户指定基线）+ 20b4cf4（真机验证硬件层）=====
+  # SOURCE_REF = 克隆基线。用户要求用 refactor，锁 HEAD ae4aeac（2026-11-19）。
+  #   refactor 是 net 层 ni/fe 拆分的新代码线，但它删掉了 PCIe/WiFi/USB/LED
+  #   驱动与 4GE 板级 DTS，单独用它编不出 PT1570-R10 的完整固件。
+  # HARDWARE_REF = 硬件层来源。Clone 步骤会在 refactor 基线之上，把下列内容
+  #   覆盖为 20b4cf4（feature/pt1500-h10-openwrt-fixes HEAD，2026-11-07）：
+  #   target/linux/rtl9617c 整棵树 + PON/WiFi/LED/LuCI 包 + 工具修复。
+  #   这正是本仓库全部 CI 注入脚本（apply-board/patch-upstream/overlay-wifi-driver）
+  #   所依赖的源码形态，保证 net 层改动不进入、驱动又齐全。
+  # 两个都写完整 40 位 SHA：git fetch --depth=1 origin <SHA> 精确检出，字节级可复现；
   # 用分支名会随上游前进而漂移，镜像内容与缓存 key（pt1570-tc-<SOURCE_HASH>-…）都会失效。
-  #
-  # ⚠️ 不要改成 main / refactor：上游默认分支已切到 refactor（net 层 ni/fe 拆分的另一条线），
-  #    main 则停在 2026-10-29 的 cea9938。换线会与本仓库的 xram 端口映射、PON 默认值、
-  #    factory 284 补丁相互冲突，必须重新真机验证后才可换。
-  SOURCE_REF: ${{ github.event.inputs.source_ref || '20b4cf4490ca55cc406d07e391691efa8cd8a087' }}
+  SOURCE_REF: ${{ github.event.inputs.source_ref || 'ae4aeac45a70be1bdf68af65cbbacb360f201b27' }}
+  HARDWARE_REF: '20b4cf4490ca55cc406d07e391691efa8cd8a087'
+  HW_BRANCH: 'feature/pt1500-h10-openwrt-fixes'
   # 本次要编译的机型（workflow_dispatch 下拉选择，diy-part2/校验/Release 全跟随它）
   TARGET_MODEL: ${{ github.event.inputs.target_model || 'youhua_pt1570_r10' }}
   # 注意：必须用 inputs.*（布尔上下文）。github.event.inputs.* 是字符串，
@@ -151,28 +152,55 @@ jobs:
       # =========================================================
       # 2. 克隆上游源码
       # =========================================================
-      - name: Clone source code
+      - name: Clone source code (refactor baseline + verified hardware layer)
         run: |
           set -e
           cd "$BUILD_ROOT"
+
+          # ---- [1/3] 基线：refactor（用户指定）----
           git clone "$REPO_URL" --depth=1 openwrt
           cd openwrt
-          # 优先按锁定的 commit 检出；失败回退到已验证分支。
-          # 该分支（feature/pt1500-h10-openwrt-fixes）的 HEAD 目前仍等于锁定 SHA，
-          # 所以回退拿到的是同一个提交；一旦上游推进了这个分支，回退就不再等价，
-          # 届时日志里会出现上面的 warning，需要重新核对后再定新的锁定值。
           if ! git fetch -q --depth=1 origin "$SOURCE_REF"; then
-            echo "::warning::按 commit 拉取失败，回退 feature/pt1500-h10-openwrt-fixes"
-            git fetch -q --depth=1 origin feature/pt1500-h10-openwrt-fixes
-            echo "SOURCE_REF=feature/pt1500-h10-openwrt-fixes" >> "$GITHUB_ENV"
+            echo "::warning::按 refactor commit 拉取失败，回退 refactor 分支"
+            git fetch -q --depth=1 origin refactor
           fi
           git checkout -q FETCH_HEAD
-          echo "SOURCE_HASH=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          BASE_HASH="$(git rev-parse --short HEAD)"
+          echo "baseline(refactor): $(git rev-parse HEAD)"
+
+          # ---- [2/3] 硬件层：20b4cf4（真机验证，refactor 删掉的驱动/4GE DTS 从这里补）----
+          if ! git fetch -q --depth=1 origin "$HARDWARE_REF"; then
+            echo "::warning::按硬件层 commit 拉取失败，回退 $HW_BRANCH"
+            git fetch -q --depth=1 origin "$HW_BRANCH"
+          fi
+          HW_REF="$(git rev-parse FETCH_HEAD)"
+          HW_HASH="$(git rev-parse --short FETCH_HEAD)"
+          echo "hardware layer: $(git rev-parse FETCH_HEAD)"
+
+          # 用已验证 commit 的整棵 target 树替换 refactor 的（net 层 ni/fe 拆分不进入），
+          # 保证驱动 / 内核 patch / dtsi 内部一致，与本仓库注入脚本的假设一致。
+          rm -rf target/linux/rtl9617c
+          git checkout -q "$HW_REF" -- target/linux/rtl9617c
+
+          # 补齐 PON / WiFi / LED / LuCI 包与工具修复（refactor 分支没有这些）。
+          git checkout -q "$HW_REF" -- \
+            package/tyfza1-pon-control \
+            package/luci-app-tyfza1-pon \
+            package/luci-theme-argon \
+            package/pt1500-storage \
+            tools/mtd-utils/Makefile \
+            package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh \
+            package/network/config/wifi-scripts/files-ucode/usr/bin/iwinfo \
+            package/network/config/wifi-scripts/files-ucode/usr/share/ucode/iwinfo.uc
+
+          # 缓存 key 同时绑定基线与硬件层，任一变化都换 key，绝不拿旧缓存编新组合。
+          echo "SOURCE_HASH=${BASE_HASH}-${HW_HASH}" >> "$GITHUB_ENV"
           ln -sfn "$BUILD_ROOT/openwrt" "$GITHUB_WORKSPACE/openwrt"
 
           test -f target/linux/rtl9617c/image/Makefile
           test -f target/linux/rtl9617c/dts/rtl9617c-tyfza1.dtsi
-          echo "source: $(git rev-parse HEAD)"
+          test -f package/tyfza1-pon-control/Makefile
+          echo "source: baseline(refactor)=$BASE_HASH hardware=$HW_HASH"
 
       # =========================================================
       # 3. 缓存：dl（源码包）+ toolchain/host（工具链）+ ccache + feeds
@@ -562,7 +590,7 @@ jobs:
             echo "| 项目 | 值 |"
             echo "|---|---|"
             echo "| 机型 | \`${TARGET_MODEL}\` |"
-            echo "| 源码 | lyq1996/rtl9617c-openwrt @ \`${SOURCE_HASH}\` |"
+            echo "| 源码 | lyq1996/rtl9617c-openwrt @ \`${SOURCE_HASH}\`（基线 refactor + 硬件层 20b4cf4） |"
             echo "| 编译时间 | ${FW_TS:-$(date '+%Y-%m-%d %H:%M:%S')} (Shanghai) |"
             echo ""
             echo '```'

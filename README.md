@@ -12,9 +12,12 @@
 支持、驱动 overlay、rootfs 默认值和防回归断言；GitHub Actions 在 runner 上克隆上游源码、
 注入定制、编译、校验产物，最后发布到 Release。
 
-- 上游基座：`lyq1996/rtl9617c-openwrt`，默认锁定已真机核实的 commit `20b4cf4`
-  （= 分支 `feature/pt1500-h10-openwrt-fixes` 的 HEAD，2026-11-07，
-   `pon: apply EPON queues per queue like stock`；写完整 40 位 SHA 才能字节级复现）
+- 上游基座（**双基线**）：`lyq1996/rtl9617c-openwrt`
+  - **克隆基线 = `refactor` @ `ae4aeac`**（2026-11-19，用户指定；完整 40 位 SHA）
+  - **硬件层 = `20b4cf4`**（分支 `feature/pt1500-h10-openwrt-fixes` HEAD，2026-11-07，
+    `pon: apply EPON queues per queue like stock`）——编译时在 refactor 之上叠加
+  - 原因：refactor 是 net 层 ni/fe 拆分的新线，但删掉了 PCIe/WiFi/USB/LED 驱动与 4GE DTS，
+    单独用编不出完整固件；叠加已真机验证的 20b4cf4 硬件层补齐，详见 §11
 - 产物形态：**FIT ABI + squashfs + UBI**，`root=/dev/fit0`（固件自洽，不依赖 bootloader 注入）
 - 验证状态：**PT1570-R10 已真机验证**（启动 / 4×GE / 双频无线 / PPPoE 拨号 / 面板灯）
   - 注：固件**不带默认 WAN**（pon0.1101 / PPPoE / PON FE 已全部去掉），首次开机需自行配置上网；上述 PPPoE 拨号指真机验证过该能力，非出厂预设。
@@ -52,7 +55,7 @@
 
    | 输入 | 默认 | 说明 |
    |---|---|---|
-   | `source_ref` | `20b4cf4…` | 上游 commit / 分支。默认 = `feature/pt1500-h10-openwrt-fixes` @ `20b4cf4`（2026-11-07 真机核实基线）；**不要改成 `main` / `refactor`**，那是另外的代码线（详见 §11「上游基座」） |
+   | `source_ref` | `ae4aeac…` | 克隆基线 commit / 分支。默认 = `refactor` @ `ae4aeac`（用户指定）；编译时会叠加 `20b4cf4` 硬件层（详见 §11「上游基座」） |
    | `target_model` | `youhua_pt1570_r10` | **选谁编谁**，只产出所选机型的固件 |
    | `upload_release` | `true` | 发布到固定 tag 的滚动 Release |
    | `prune_release` | `true` | 发布后删除该 Release 里不属于本次产物的旧附件（只留最新一套，见 §5.4） |
@@ -419,39 +422,43 @@ Actions 日志里 `Restore toolchain & host tools cache` 是否显示 `Cache res
 
 ## 11. 上游与致谢
 
-### 上游基座（锁定的 commit 是什么）
+### 上游基座（双基线：refactor 克隆 + 20b4cf4 硬件层）
 
-`source_ref` 的默认值 `20b4cf4490ca55cc406d07e391691efa8cd8a087` 不是随手取的，它对应：
+按你的要求，**克隆基线用 `refactor`**。但 refactor 是 net 层 ni/fe 拆分的新代码线，
+它把 PCIe/WiFi/USB/LED 驱动和 4GE 板级 DTS 都删了——单独用它编不出 PT1570-R10 的完整固件
+（无 WiFi、无 USB、无面板灯、4GE 不通）。所以编译时在 refactor 基线之上**叠加**一套
+已真机验证的硬件层，两者各司其职：
 
-| 项目 | 值 |
-|---|---|
-| 仓库 | `lyq1996/rtl9617c-openwrt` |
-| 分支 | `feature/pt1500-h10-openwrt-fixes`（**该分支 HEAD 就是这个 SHA**） |
-| 作者 / 时间 | Leo，2026-11-07 19:45（北京时间） |
-| 提交标题 | `pon: apply EPON queues per queue like stock` |
-| 改动 | `package/tyfza1-pon-control/src/{pon-backend.h,pon-oamd.c}`、`.../uci-defaults/90-tyfza1-pon-wan` |
+| 角色 | 变量 | 锁定值 | 来源分支 | 作用 |
+|---|---|---|---|---|
+| 克隆基线 | `SOURCE_REF` | `ae4aeac45a70be1bdf68af65cbbacb360f201b27` | `refactor`（2026-11-19 HEAD） | 提供 net 层 ni/fe 拆分等主线代码 |
+| 硬件层 | `HARDWARE_REF` | `20b4cf4490ca55cc406d07e391691efa8cd8a087` | `feature/pt1500-h10-openwrt-fixes`（2026-11-07 HEAD） | 提供 PCIe/WiFi/USB/LED 驱动、4GE DTS、PON/LuCI 包 |
 
-内容是把 `epon_sla` 里"整条 TCONT 重写"改成"逐队列更新 VOQ map / VSTBL credit / token bucket"，
-对齐厂商固件的 `dal_rtl8277c_ponmac_queue_add()` 行为。
+**叠加具体做什么**（workflow 的 Clone 步骤，早于 diy-part1）：
 
-**为什么用完整 40 位 SHA**：Clone 步骤是 `git fetch --depth=1 origin "$SOURCE_REF"` 后
-`checkout FETCH_HEAD`。写分支名会随上游前进而漂移——镜像内容变、缓存 key 失效、
-"上次能跑这次不行"无法复现。写 SHA 才能字节级复现。
+1. `git clone --depth=1` 后 `checkout $SOURCE_REF`（refactor 基线）。
+2. `fetch $HARDWARE_REF`，用它的**整棵** `target/linux/rtl9617c` 替换 refactor 的
+   （`rm -rf` 再 `git checkout $HW_REF -- target/linux/rtl9617c`）——保证驱动、内核 patch、
+   dtsi 内部一致，net 层拆分不进入。
+3. 补齐 refactor 没有的包：`tyfza1-pon-control`、`luci-app-tyfza1-pon`、`luci-theme-argon`、
+   `pt1500-storage`、`tools/mtd-utils/Makefile`、wifi-scripts 的 ucode 文件。
+4. 之后 diy-part1/2 的全部注入逻辑原样运行（它们依赖的正是 20b4cf4 形态的源码树）。
 
-**为什么不能换成 `main` / `refactor`**：
+这样 refactor 是名副其实的 git 基线，而真机验证过的驱动/修复一个不少。
+两个值都写完整 40 位 SHA、`git fetch --depth=1 origin <SHA>` 精确检出，字节级可复现；
+缓存 key `SOURCE_HASH=${BASE_HASH}-${HW_HASH}` 同时绑定两者，任一线前进都换 key，
+绝不拿旧缓存编新组合。`preflight.sh` 会校验这套双基线配置没被改坏。
+
+**另两条线为什么单独都不行**：
 
 | 分支 | HEAD | 说明 |
 |---|---|---|
-| `feature/pt1500-h10-openwrt-fixes` | `20b4cf4`（2026-11-07） | ✅ 本仓库基线，真机验证过 |
-| `main` | `cea9938`（2026-10-29） | 早已停更，缺 PON 队列修复 |
-| `refactor`（上游默认分支） | `13ebc89`（2026-11-13） | net 层 ni/fe 拆分 + RTL8221B PHY 内置补丁，**另一条开发线** |
+| `refactor` | `ae4aeac`（2026-11-19） | ✅ 克隆基线；但缺 WiFi/USB/LED/4GE 驱动，须叠加硬件层 |
+| `feature/pt1500-h10-openwrt-fixes` | `20b4cf4`（2026-11-07） | ✅ 硬件层来源，真机验证过 |
+| `main` | `cea9938`（2026-10-29） | 早已停更，缺 PON 队列修复，不用 |
 
-后两者会与本仓库的 xram 端口映射（`index = 4 - port`）、PON 默认值、factory 284 补丁相互冲突，
-换之前必须重新真机验证。
-
-**分支前进后怎么办**：Clone 步骤在按 SHA 拉取失败时会回退到该分支并打 `::warning::`。
-分支 HEAD 目前仍等于锁定 SHA，所以回退是等价的；一旦上游推进这个分支，回退就不再等价——
-看到那条 warning 时，先核对新提交再决定是否更新锁定值（同时要重跑真机验证）。
+**分支前进后怎么办**：Clone 步骤在按 SHA 拉取失败时会回退到对应分支并打 `::warning::`。
+看到 warning 时先核对新提交，确认无回归再更新锁定值（同时要重跑真机验证）。
 
 ### 致谢
 
