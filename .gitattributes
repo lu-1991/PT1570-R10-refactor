@@ -5,6 +5,8 @@
 
 # 明确标成二进制的资产，避免被当成文本做换行转换
 *.bin binary
+*.db  binary
+*.p7s binary
 *.itb binary
 *.gz  binary
 *.png binary

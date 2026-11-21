@@ -45,7 +45,7 @@ import pathlib, sys
 bad = [str(p) for p in pathlib.Path('.').rglob('*')
        if p.is_file()
        and '.git' not in p.parts          # .git 二进制对象天然含 \r，跳过
-       and p.suffix.lower() != '.bin'
+       and p.suffix.lower() not in ('.bin', '.db', '.p7s')  # 二进制资产
        and b'\r' in p.read_bytes()]
 for b in bad[:5]: print("    CR:", b)
 sys.exit(1 if bad else 0)
@@ -465,6 +465,27 @@ for s in 92-pt1570-r10-wifi-default 92-pt1570-r10-wireless-country \
   ! grep -qE 'pon0\.|pppoe|PPPoE|interface .*wan' "files/etc/uci-defaults/$s" \
     && ok "$s 无默认 WAN 注入" || bad "$s 混入了默认 WAN 配置"
 done
+
+# ---------------------------------------------------------------
+sec "7g. 5G 法规域 regdb（2026-11-21：缺签名 = 5G 永远不广播）"
+# 真机定位：regulatory.db 无配套 .p7s -> 内核判 regdb 无效 -> world domain(00)
+# -> 5G 信道全 NO-IR -> hostapd 起 5G AP 失败。必须带正确签名的 db+p7s。
+RD=files/lib/firmware/regulatory.db
+RDP=files/lib/firmware/regulatory.db.p7s
+[ "$(stat -c %s "$RD" 2>/dev/null)" = "6348" ] \
+  && [ "$(md5sum "$RD" 2>/dev/null | cut -d' ' -f1)" = "f90f67fbb0bc2f8490c8266557630e92" ] \
+  && ok "regulatory.db 含 CN 规则（6348B, md5 校验）" \
+  || bad "regulatory.db 缺失/损坏（5G 会因 NO-IR 起不来）"
+[ "$(stat -c %s "$RDP" 2>/dev/null)" = "1085" ] \
+  && [ "$(md5sum "$RDP" 2>/dev/null | cut -d' ' -f1)" = "37d15dd7840f35213ce48f59250c8c6a" ] \
+  && ok "regulatory.db.p7s 签名在位（内核验证 regdb 必需）" \
+  || bad "regulatory.db.p7s 缺失/损坏（regdb 会被判 invalid）"
+[ -x files/etc/init.d/wifi-regdom ] \
+  && grep -q 'iw reg set CN' files/etc/init.d/wifi-regdom \
+  && ok "wifi-regdom 开机脚本在位（regdomain CN 兜底）" \
+  || bad "缺 wifi-regdom 开机脚本（regdomain 可能停在世界域）"
+sh -n files/etc/init.d/wifi-regdom 2>/dev/null \
+  && ok "wifi-regdom 语法检查通过" || bad "wifi-regdom 语法错误"
 
 # ---------------------------------------------------------------
 sec "8. 源码树注入深度校验（可选，WRT=源码树时执行）"

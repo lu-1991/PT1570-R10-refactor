@@ -1,0 +1,22 @@
+#!/bin/sh /etc/rc.common
+# 确保 cfg80211 regulatory domain = CN（5G WiFi 必需）
+#
+# 背景（2026-11-21 真机定位）：rtl_ax_ap 平台若 regulatory.db 缺签名（.p7s），
+# 内核判定 regdb 无效 -> 退回 world domain (country 00) -> 所有 5G 信道标记
+# NO-IR（被动/禁止发射）-> hostapd 起 5G AP 时报
+#   "Frequency 5745 not allowed for AP mode, flags: NO-IR"
+#   "DFS start_dfs_cac() failed" -> 5G 永远不广播。
+# 修复：files/lib/firmware/regulatory.db + .p7s 提供带签名的有效数据库，
+# 本脚本再兜底把 regdomain 设为 CN（只要 regdb 有效此命令即成功）。
+# CN 下 5725-5850MHz（信道 149-165）无 NO-IR/无 DFS，5G HE80 正常起。
+
+START=19
+
+start() {
+	# 已经是正确的 regdomain 就不动（幂等，避免每次开机刷日志）
+	iw reg get 2>/dev/null | grep -q '^country CN:' && return 0
+	iw reg set CN 2>/dev/null && \
+		logger -t wifi-regdom "regulatory domain set to CN (5G AP enable)" || \
+		logger -t wifi-regdom "iw reg set CN failed; check regulatory.db/.p7s"
+	return 0
+}

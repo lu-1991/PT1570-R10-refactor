@@ -290,6 +290,36 @@ ITB 的 `90-tyfza1-pon-wan` / `91-tyfza1-lan1-wan*` / dawn / mesh 等脚本含�
 本仓库沿用 PT1570-R10 已真机验证的 RTLFACT1 机制。preflight §7f 对上述资产与
 「新增脚本零 WAN 注入」逐项设了断言。
 
+### 6.2 2026-11-21 5G 不广播根因：regulatory.db 缺签名（重要）
+
+真机现象：2.4G 正常，5G 完全没有 SSID。`dmesg`/`logread` 定位链路：
+
+```
+cfg80211: loaded regulatory.db is malformed or signature is missing/invalid
+iw reg get -> country 00 (world domain)
+iw phy0 channels -> 所有 5G 信道 NO-IR（被动/禁止发射）
+hostapd: Frequency 5745 (149) not allowed for AP mode, flags: NO-IR
+hostapd: ACS 选到 DFS 信道 52 -> DFS start_dfs_cac() failed -> AP-DISABLED
+```
+
+根因：`wireless-regdb` 包装的 `regulatory.db` **缺配套签名 `regulatory.db.p7s`**，
+内核据此判定 regdb 无效、退回 world domain，5G 信道全被标记 NO-IR，hostapd 无论
+选哪个信道都起不来（固定 149 / 降到 HE20 都无效，与固件/驱动/校准无关）。
+
+修复（已真机验证：5G 恢复广播，信道 149 / HE80）：
+
+- `files/lib/firmware/regulatory.db`（6348B，md5 `f90f67fb…`）+ 同目录
+  `regulatory.db.p7s`（1085B，md5 `37d15dd7…`）：来自 kernel.org 官方
+  `wireless-regdb-2026.09.03`，**带有效签名**。CN 规则下 5725–5850MHz
+  （信道 149–165）无 NO-IR、无 DFS。
+- `files/etc/init.d/wifi-regdom`（START=19）：开机兜底 `iw reg set CN`（幂等）。
+- preflight §7g 对两个文件的尺寸+md5、脚本内容与语法设断言；
+  `.gitattributes` 把 `.db`/`.p7s` 标为 binary 防止换行转换破坏签名。
+
+> 排障备忘：`iw reg set CN` 在 regdb 无效时**静默失败**（仍是 country 00）；
+> 必须先有有效 db+p7s，regdom 设置才生效。设备极简 busybox（无 base64/xxd/od/
+> sftp），远程写二进制可用 `awk '{printf "%c",$1}'` 从 stdin 逐字节灌入。
+
 ---
 
 ## 7. 目录结构
@@ -306,11 +336,13 @@ ITB 的 `90-tyfza1-pon-wan` / `91-tyfza1-lan1-wan*` / dawn / mesh 等脚本含�
 │   ├── etc/uci-defaults/92-pt1570-r10-wifi-default  # 双频首启 SSID/加密（ITB 移植，见 §6.1）
 │   ├── etc/uci-defaults/92-pt1570-r10-wireless-country # 默认 country=CN（ITB 移植）
 │   ├── etc/init.d/tyfza1-factory            # factory 校准提取（必须精确 284 字节）
+│   ├── etc/init.d/wifi-regdom               # 开机兜底 regdomain=CN（5G 必需，见 §6.2）
 │   ├── etc/uci-defaults/96-pt1570-r10-leds     # 面板灯 → 真实网口
 │   ├── etc/uci-defaults/97-pt1570-r10-wifi24   # 2.4G 首启兜底：country/启用/不隐藏（见 §6）
 │   ├── etc/uci-defaults/98-pt1570-r10-wifi-stability  # 断流缓解：不踢空闲终端 + country（见 FAQ）
 │   ├── etc/uci-defaults/99-pt1570-fit          # 时区/主机名/FIT 接线兜底
 │   └── lib/firmware/realtek/tyfza1/            # ITB 全量 AP 固件 + 70 张射频表（含 RFE50/PON_2G/YH9570，见 §6.1）
+│   └── lib/firmware/regulatory.db(+.p7s)       # 带签名的无线法规库，5G 不广播的根因修复（见 §6.2）
 ├── board/
 │   ├── dts/rtl9617c-pt1570-r10.dts  # 板级 DTS（root=/dev/fit0 自洽启动、按键修正）
 │   ├── devices/pt1570-r10.mk.inc    # image/Makefile 的 Device 定义片段
