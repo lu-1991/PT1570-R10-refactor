@@ -180,7 +180,14 @@ void rtl_ax_phy_release(struct rtl_ax_phy_inputs *inputs)
 int rtl_ax_phy_load(struct device *dev, unsigned int chip, struct rtl_ax_phy_inputs *inputs)
 {
 	const char *family = chip == RTL_AX_8852C ? "rtl8852ce" : "rtl8192xbe";
-	const char *fem = chip == RTL_AX_8852C ? "RTK66587_BPF" : "RTK66287";
+	/* TYFZA1/PT1570-R10 RFE selection, taken from the stock rtk_wifi6.ko
+	 * build config (CONFIG_WLAN0_RFE_TYPE_54 / CONFIG_WLAN1_RFE_TYPE_50):
+	 * WLAN0 = 8852C 5G  -> RFE54 / RTK66587_BPF
+	 * WLAN1 = 8192XB 2.4G -> RFE50 / PON_2G.  The 2.4G front-end is RFE50
+	 * (ver=27 "8192XBR RFE50" table), not RFE54; using the RFE54 register
+	 * table drives the wrong FEM and leaves 2.4G TX effectively dead. */
+	const char *rfe = chip == RTL_AX_8852C ? "RFE54" : "RFE50";
+	const char *fem = chip == RTL_AX_8852C ? "RTK66587_BPF" : "PON_2G";
 	const char *names[] = { "PHY_REG.txt", "PHY_REG_GAIN.txt", "RadioA.txt", "RadioB.txt" };
 	unsigned int stage, id;
 	char name[128];
@@ -189,8 +196,8 @@ int rtl_ax_phy_load(struct device *dev, unsigned int chip, struct rtl_ax_phy_inp
 	inputs->chip = chip;
 	for (stage = 0; stage < RTL_AX_PHY_STAGES; stage++)
 		for (id = 0; id < RTL_AX_PHY_TABLES; id++) {
-			snprintf(name, sizeof(name), "realtek/tyfza1/%s/RFE54/%s%s%s",
-				 family, stage ? fem : "", stage ? "/" : "", names[id]);
+			snprintf(name, sizeof(name), "realtek/tyfza1/%s/%s/%s%s%s",
+				 family, rfe, stage ? fem : "", stage ? "/" : "", names[id]);
 			ret = rtl_ax_phy_read_table(dev, name, &inputs->table[stage][id]);
 			if (ret) {
 				rtl_ax_phy_release(inputs);

@@ -1149,7 +1149,8 @@ static ssize_t radio_state_show(struct device *dev,
 		radio->dmac_engines_ready ? "ready" : "off", radio->firmware_tx,
 		radio->cmac_registers_ready ? "ready" : "off",
 		radio->trx_registers_ready ? "ready" : "off",
-		radio->phy_inputs_ready ? "RFE54-base-and-FEM" : "off",
+		radio->phy_inputs_ready ?
+			(radio->chip == RTL_AX_8852C ? "RFE54-base-and-FEM" : "RFE50-base-and-FEM") : "off",
 		radio->features_ready ? "BA-CAM8-acknowledged" : "off", radio->done_acks,
 		radio->bb_base_ready ? "applied" : "off", radio->radio_base_ready ? "applied" : "off",
 		radio->fem_ready ? "base-and-FEM" : "pending",
@@ -2041,9 +2042,9 @@ static ssize_t radio_gapk_show(struct device *dev,
 	ssize_t length;
 
 	mutex_lock(&radio->command_mutex);
-	length = sysfs_emit(buffer, "GAPK_init=%s channel=%u RFE=54 calibration=%s "
+	length = sysfs_emit(buffer, "GAPK_init=%s channel=%u RFE=%u calibration=%s "
 		"RF10055_A_B=%05x,%05x HW_table_A_B=%u,%u\n", state->initialized ? "applied" : "pending",
-		state->channel, state->xb_rfe_skip ? "skipped-by-original-XB-RFE-gate" :
+		state->channel, radio->chip == RTL_AX_8852C ? 54 : 50, state->xb_rfe_skip ? "skipped-by-original-XB-RFE-gate" :
 			radio->c_gapk.ready ? "C-SCC5G-applied" : "C-measurement-pending",
 		state->table_readback[0], state->table_readback[1],
 		(state->table_readback[0] >> 19) & 1, (state->table_readback[1] >> 19) & 1);
@@ -2078,7 +2079,7 @@ static ssize_t radio_gapk_restore_show(struct device *dev,
 
 	mutex_lock(&radio->command_mutex);
 	if (radio->chip == RTL_AX_8192XB) {
-		length = sysfs_emit(buffer, "GAPK_measurement=skipped-by-original-XB-RFE54\n");
+		length = sysfs_emit(buffer, "GAPK_measurement=skipped-by-original-XB-RFE50\n");
 		goto unlock;
 	}
 	for (path = 0; path < 2; path++) {

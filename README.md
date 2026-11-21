@@ -320,6 +320,41 @@ hostapd: ACS 选到 DFS 信道 52 -> DFS start_dfs_cac() failed -> AP-DISABLED
 > 必须先有有效 db+p7s，regdom 设置才生效。设备极简 busybox（无 base64/xxd/od/
 > sftp），远程写二进制可用 `awk '{printf "%c",$1}'` 从 stdin 逐字节灌入。
 
+### 6.3 2026-11-21 2.4G 手机搜不到根因：驱动灌错 RFE 前端表（重要）
+
+真机现象：所有无线终端（小米15/HyperOS2 及其他设备）搜不到 `PT1570-R10-2.4G`，
+手动添加也连不上；5G 完全正常、手机能搜邻居 2.4G、电脑紧贴路由器能扫到 2.4G
+（802.11g/信道1/信号100%）。软件配置层（HT20/CCK/SSID/信道/天线/txpower）、
+固件 bin、校准 blob、regdb 全部逐一排除。
+
+从真·原厂 NAND 备份（`E:/pt1570-r10/pt1570-r10-backup`，mtd8 rootfs）定位到根因：
+
+- 原厂无线驱动 `rtk_wifi6.ko` 内含编译期配置：
+  `CONFIG_WLAN0_RFE_TYPE_54`、`CONFIG_WLAN1_RFE_TYPE_50`。
+  即 **5G（WLAN0/8852C）= RFE54，2.4G（WLAN1/8192XB）= RFE50**。
+- 原厂 `etc/conf/rtl8192xbe/` 有 RFE50/51/53/54 四套前端表，驱动按硬件选；
+  PT1570-R10 的 2.4G 前端是 **RFE50**，配套表在 `RFE50/`（base，表头
+  `8192XBR RFE50 version=27`）+ `RFE50/PON_2G/`（PON 模式 FEM overlay）。
+- 但本工程的 `rtl_ax_ap` 驱动（refactor 逆向重写版）把两路射频表路径**硬编码成
+  RFE54**：2.4G 读 `rtl8192xbe/RFE54/` + `RFE54/RTK66287/`（ver31），
+  与真实前端 RFE50 不符 → 寄存器/FEM/功率表全套灌错 → 2.4G 发射极弱；
+  5G 恰好 RFE54 正确，所以一直正常。设备 `radio_state` 曾显示
+  `phy_inputs=RFE54-base-and-FEM`、`GAPK_measurement=skipped-by-original-XB-RFE54`。
+
+修复（2026-11-21，`board/wifi/rtl_ax_ap/`）：
+
+- `phy.c` / `limits.c` / `power-tables.c`：按芯片选择 RFE 目录——8852C(5G) 仍用
+  `RFE54/RTK66587_BPF`，8192XB(2.4G) 改用 `RFE50/PON_2G`。表文件本就在工程里
+  （ITB 移植时已带入），且与真原厂 backup md5 一致，无需新增资产。
+- `pci.c`：三处诊断字符串由写死 RFE54 改为按芯片反映实际 RFE（仅显示，不改硬件行为）。
+- 说明：驱动对 XB 的 GAPK 测量本就 skip（逆向驱动未移植该测量，与 RFE 值无关），
+  保持原样；核心修复是表路径。
+- 校验：`scripts/preflight.sh`（PREFLIGHT_OK）、`scripts/verify-rf-tables.py`
+  （70 张表 0 失败，含 RFE50/PON_2G）均通过。
+
+> 待真机验证：云编译刷机后，`cat /sys/.../0001:01:00.0/radio_state` 应显示
+> `phy_inputs=RFE50-base-and-FEM`，`radio_gapk` 显示 `RFE=50`。若 2.4G 恢复则根因坐实。
+
 ---
 
 ## 7. 目录结构

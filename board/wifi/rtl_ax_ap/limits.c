@@ -284,7 +284,9 @@ int rtl_ax_limits_load(struct device *dev, unsigned int chip, unsigned int stage
 		       struct rtl_ax_limits *limits)
 {
 	const char *family = chip == RTL_AX_8852C ? "rtl8852ce" : "rtl8192xbe";
-	const char *fem = chip == RTL_AX_8852C ? "RTK66587_BPF" : "RTK66287";
+	/* See phy.c: 5G uses RFE54/RTK66587_BPF, 2.4G uses RFE50/PON_2G. */
+	const char *rfe = chip == RTL_AX_8852C ? "RFE54" : "RFE50";
+	const char *fem = chip == RTL_AX_8852C ? "RTK66587_BPF" : "PON_2G";
 	const char *const names[] = {"TXPWR_LMT.txt", "TXPWR_LMT_RU.txt",
 		"TXPWR_LMT_6G_LPI.txt", "TXPWR_LMT_RU_6G_LPI.txt",
 		"TXPWR_LMT_6G_STD.txt", "TXPWR_LMT_RU_6G_STD.txt",
@@ -297,8 +299,8 @@ int rtl_ax_limits_load(struct device *dev, unsigned int chip, unsigned int stage
 		const char *file = stage && table == 2 ? "TXPWR_LMT_6G_LOW.txt" :
 			stage && table == 3 ? "TXPWR_LMT_RU_6G_LOW.txt" : names[table];
 
-		snprintf(name, sizeof(name), "realtek/tyfza1/%s/RFE54/%s%s%s",
-			 family, stage ? fem : "", stage ? "/" : "", file);
+		snprintf(name, sizeof(name), "realtek/tyfza1/%s/%s/%s%s%s",
+			 family, rfe, stage ? fem : "", stage ? "/" : "", file);
 		ret = rtl_ax_limit_file(dev, name, limits, table & 1, table / 2);
 		if (ret)
 			return ret;
