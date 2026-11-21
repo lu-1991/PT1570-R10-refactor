@@ -265,8 +265,8 @@ jobs:
         continue-on-error: true
         with:
           path: ${{ env.BUILD_ROOT }}/openwrt/feeds
-          key: pt1570-feeds-${{ env.SOURCE_HASH }}
-          restore-keys: pt1570-feeds-
+          key: pt1570-feeds-v2-${{ env.SOURCE_HASH }}
+          restore-keys: pt1570-feeds-v2-
 
       # =========================================================
       # 4. feeds → diy-part1 → files → diy-part2
@@ -274,8 +274,24 @@ jobs:
       - name: Update and install feeds
         working-directory: ${{ env.BUILD_ROOT }}/openwrt
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          set -e
+          # 2026-11-21：缓存命中的旧 feeds 目录在 install 阶段可能与 update 后的
+          # 源状态不一致（run2 成功/run4 命中同 key 缓存后失败）。 install 失败时
+          # 清空 feeds 做一次全量重建自愈；仍失败则真实报错原样抛出。
+          feeds_rebuild() {
+            echo "::warning::feeds failed (cache state suspect), purging feeds and rebuilding from scratch"
+            rm -rf feeds
+            ./scripts/feeds update -a || return 1
+            ./scripts/feeds install -a || return 1
+          }
+          # 缓存 restore 后的 .git 可能带 stale lock（Windows 同步/中断残留），
+          # 先清掉，避免 update 误判 "Another git process is running" 而失败。
+          find feeds -type f \( -name '*.lock' -o -name 'FETCH_HEAD' \) -print -delete 2>/dev/null || true
+          if ! ./scripts/feeds update -a; then
+            feeds_rebuild || exit 1
+          elif ! ./scripts/feeds install -a; then
+            feeds_rebuild || exit 1
+          fi
           # Windows/9p 同步过的 feed 权限必须收敛，rpcd 拒绝 world-writable handler
           chmod -R go-w feeds/luci feeds/packages 2>/dev/null || true
           find feeds/luci -path '*/root/usr/share/rpcd/ucode/*' -type f -exec chmod 0755 {} + 2>/dev/null || true
@@ -294,7 +310,7 @@ jobs:
         continue-on-error: true
         with:
           path: ${{ env.BUILD_ROOT }}/openwrt/feeds
-          key: pt1570-feeds-${{ env.SOURCE_HASH }}
+          key: pt1570-feeds-v2-${{ env.SOURCE_HASH }}
 
       - name: Apply custom rootfs files
         run: |
