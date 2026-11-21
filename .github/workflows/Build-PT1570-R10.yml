@@ -333,7 +333,7 @@ jobs:
           set -e
           T="$GITHUB_WORKSPACE/files/lib/firmware/realtek/tyfza1"
           n=$(find "$T" -name '*.txt' | wc -l)
-          [ "$n" = 42 ] || { echo "::error::射频表数量 $n != 42"; exit 1; }
+          [ "$n" -ge 70 ] || { echo "::error::射频表数量 $n < 70（ITB 全量移植）"; exit 1; }
           python3 "$GITHUB_WORKSPACE/scripts/verify-rf-tables.py" "$T"
           echo "RF_TABLES_OK=True files=$n"
 

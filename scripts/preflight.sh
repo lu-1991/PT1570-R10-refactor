@@ -415,6 +415,15 @@ for chip in rtl8192xbe rtl8852ce; do
   [ "$MODE" = "120000" ] \
     && ok "$LNK 是符号链接（git mode 120000）" \
     || bad "$LNK 不是符号链接（git mode=${MODE:-无}，驱动 probe 会失败）"
+  # 关键：symlink 内容必须是设备上的 /tmp 绝对路径。2026-11-19 曾因
+  # Windows core.symlinks=false 下 cp -a ITB 解包目录，把 C:/Users/... 的
+  # 本机绝对路径写进 git blob，设备端读不到校准 → 5G/2.4G probe 全失败。
+  # mode 校验抓不到这个（仍是 120000），必须逐字节比 blob 内容。
+  TGT=$(git show ":$LNK" 2>/dev/null)
+  EXPECT="/tmp/tyfza1-factory/tyfza1/$chip/flash-calibration.bin"
+  [ "$TGT" = "$EXPECT" ] \
+    && ok "$LNK 指向 $EXPECT" \
+    || bad "$LNK 指向 [$TGT]，应为 [$EXPECT]（设备端 probe 必失败）"
   FB="files/lib/firmware/realtek/tyfza1/$chip/flash-calibration.factory-fallback.bin"
   if [ "$(stat -c %s "$FB" 2>/dev/null)" = "284" ] \
      && [ "$(head -c 8 "$FB")" = "TYFC0003" ]; then
