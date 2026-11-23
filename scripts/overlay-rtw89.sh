@@ -67,6 +67,51 @@ grep -q 'RTL8192XB' "$PATCH_DST" \
   || fail "740 补丁落地后没有 RTL8192XB 标记"
 echo "  内核补丁 740-wifi-rtw89-8192xb.patch 已落地"
 
+# ---- 2b. 物理移除旧的 rtl_ax_ap 驱动（根因修复）----
+# 201-native-radio.patch 会往内核注入两行：
+#   +source "drivers/net/wireless/realtek/rtl_ax_ap/Kconfig"   -> 定义 config RTL_AX_AP
+#   +obj-$(CONFIG_RTL_AX_AP)  += rtl_ax_ap/                    -> 递归编译该目录
+# 只要这两行在，内核 Kconfig 就有 RTL_AX_AP 符号，syncconfig 在缺值时按
+# tristate 默认重新打开(=m)，进而编译 rtl_ax_ap 并撞上已删除的 pe-tx-code.h
+# （CI 连续两次同一报错）。改 config 的 not-set 不可靠——syncconfig 会覆盖。
+# 彻底解法：从补丁里删掉这两行 + 删除驱动目录，让内核根本看不到该符号。
+python3 - "$WRT" <<'PY'
+import pathlib, sys
+wrt = pathlib.Path(sys.argv[1])
+patch = wrt / "target/linux/rtl9617c/patches-6.18/201-native-radio.patch"
+if patch.exists():
+    lines = patch.read_text(encoding="utf-8", errors="replace").splitlines()
+    out = []
+    removed = 0
+    for ln in lines:
+        s = ln.strip()
+        if s == '+source "drivers/net/wireless/realtek/rtl_ax_ap/Kconfig"':
+            removed += 1
+            continue
+        if s.startswith('+obj-$(CONFIG_RTL_AX_AP)'):
+            removed += 1
+            continue
+        out.append(ln)
+    patch.write_text('\n'.join(out) + '\n', encoding='utf-8', newline='\n')
+    print(f'  201 补丁移除 rtl_ax_ap 注入 {removed} 行')
+else:
+    print('  201 补丁不存在，跳过')
+
+drv = wrt / "target/linux/rtl9617c/files-6.18/drivers/net/wireless/realtek/rtl_ax_ap"
+if drv.exists():
+    import shutil
+    shutil.rmtree(drv)
+    print('  已删除 rtl_ax_ap 驱动目录')
+else:
+    print('  rtl_ax_ap 驱动目录不存在，跳过')
+PY
+# 断言：201 补丁和内核树里都不能再有 rtl_ax_ap / RTL_AX_AP 引用
+! grep -rq 'rtl_ax_ap' "$WRT/target/linux/rtl9617c/patches-6.18/" \
+  || fail "201 补丁仍有 rtl_ax_ap 引用（内核会重新编译旧驱动）"
+! grep -rq 'CONFIG_RTL_AX_AP' "$WRT/target/linux/rtl9617c/files-6.18/drivers/net/wireless/" \
+  || fail "内核源码树仍有 CONFIG_RTL_AX_AP 引用"
+echo "  内核树已无 rtl_ax_ap 驱动（RTL_AX_AP 符号不再存在）"
+
 # ---- 3. 内核 config ----
 # 硬件层 config 默认：CONFIG_RTL_AX_AP=m，NVMEM 全关。rtw89 必须反过来。
 # 用 python 逐行幂等处理：删旧符号 -> 追加新符号；保留其余原样。
