@@ -21,7 +21,7 @@ sec "1. 项目结构完整性"
 WF=$(find .github/workflows -maxdepth 1 -name '*.yml' -o -maxdepth 1 -name '*.yaml' 2>/dev/null | head -1)
 for f in diy-part1.sh diy-part2.sh \
          configs/youhua_pt1570-r10.config \
-         scripts/apply-board.sh scripts/overlay-rtw89.sh \
+         scripts/apply-board.sh scripts/overlay-rtw89.sh scripts/overlay-theme.sh \
          scripts/patch-upstream.sh scripts/verify-fit-boot.py \
          board/dts/rtl9617c-pt1570-r10.dts board/devices/pt1570-r10.mk.inc \
          files/etc/uci-defaults/96-pt1570-r10-leds \
@@ -123,10 +123,13 @@ grep -q 'PROFILE="\${TARGET_MODEL' diy-part2.sh \
   && grep -q 'ALL_DEVICES=' diy-part2.sh \
   && ok "diy-part2 机型选择逻辑在位" || bad "diy-part2 缺机型选择逻辑"
 
-# 主题与软件包口径：argon 主题（用户配置），不含 Fluent/tailscale/samba/upnp/wol
-grep -q '^CONFIG_PACKAGE_luci-theme-argon=y$' "$CFG" \
-  && ok "luci-theme-argon=y（用户配置口径：默认主题 argon）" \
-  || bad "$CFG 缺 luci-theme-argon"
+# 主题与软件包口径：design 主题（0x676e67 拉库），不含 argon/Fluent/tailscale/samba/upnp/wol
+grep -q '^CONFIG_PACKAGE_luci-theme-design=y$' "$CFG" \
+  && ok "luci-theme-design=y（用户配置口径：默认主题 design）" \
+  || bad "$CFG 缺 luci-theme-design"
+! grep -q '^CONFIG_PACKAGE_luci-theme-argon=y$' "$CFG" \
+  && ok "argon 未启用（主题已换成 design）" \
+  || bad "$CFG 仍启用 luci-theme-argon（与 design 抢默认主题）"
 ! grep -q '^CONFIG_PACKAGE_luci-theme-fluent=y$' "$CFG" \
   && ok "未启用 Fluent（按用户要求移除）" \
   || bad "$CFG 仍启用 luci-theme-fluent（应移除）"
@@ -143,14 +146,33 @@ done
 ! grep -q '^CONFIG_PACKAGE_kmod-rtl-ax-ap=y$' "$CFG" \
   && ok "逆向 kmod-rtl-ax-ap 已移除（rtw89 为内核 built-in）" \
   || bad "$CFG 仍有 kmod-rtl-ax-ap（与 rtw89 抢 PCI 设备）"
-# 默认主题：argon 由厂商 97-rtl9617c-argon-default 设定；本仓库不应有 fluent 抢主题脚本
+# 默认主题：design 由包自带 30_luci-theme-design 设定；argon/Fluent 抢主题脚本都不应有
 [ ! -f files/etc/uci-defaults/98-pt1570-fluent-default ] \
-  && ok "无 Fluent 默认主题脚本（argon 由厂商脚本设定）" \
+  && ok "无 Fluent 默认主题脚本（design 由包自带脚本设定）" \
   || bad "存在 98-pt1570-fluent-default，会抢走默认主题"
-# 静态主题文件（htdocs 等）不许出现在 files/
-! find files \( -iname '*vantage*' -o -iname '*fluent*' -o -iname '*argon*' \) \
+! grep -rqs -e '/luci-static/argon' -e 'luci\.themes\.Argon' files/ 2>/dev/null \
+  && ok "files/ 无 argon 默认主题设置" \
+  || bad "files/ 仍有 argon 主题设置（会抢走 design）"
+# 静态主题文件（htdocs 等）不许出现在 files/（design 走包构建，不注入静态文件）
+! find files \( -iname '*vantage*' -o -iname '*fluent*' -o -iname '*argon*' \
+                -o -iname '*design*' \) \
     ! -path '*/etc/uci-defaults/*' -print -quit 2>/dev/null | grep -q . \
   && ok "files/ 无静态主题残留" || bad "files/ 残留主题注入文件（应删除）"
+
+# 主题拉库链路（diy-part1 -> overlay-theme.sh）：锁 SHA + 删 argon 两脚本 + 默认主题断言
+grep -q 'scripts/overlay-theme.sh' diy-part1.sh \
+  && ok "diy-part1 接入 overlay-theme.sh" || bad "diy-part1 未调用 overlay-theme.sh"
+grep -q 'luci-theme-design' scripts/overlay-theme.sh \
+  && grep -q '5cea733806ccaf17fd63790d171bb2b65f29f8bd' scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 锁 design 仓库 + 固定 SHA（可复现）" \
+  || bad "overlay-theme.sh 未锁定 design 仓库/SHA"
+for s in 95-tyfza1-argon 97-tyfza1-argon-default; do
+  grep -q "$s" scripts/overlay-theme.sh \
+    && ok "overlay-theme.sh 删除厂商 $s" || bad "overlay-theme.sh 未删除 $s"
+done
+grep -q '/luci-static/design' scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 断言 design 默认主题脚本" \
+  || bad "overlay-theme.sh 缺 design 默认主题断言"
 
 # ---------------------------------------------------------------
 sec "5. workflow 结构与防回归"
@@ -161,6 +183,9 @@ grep -q 'configs/youhua_pt1570-r10.config' "$WF" \
   && ok "引用机型配置" || bad "未引用机型配置"
 grep -q 'diy-part1.sh' "$WF" && grep -q 'diy-part2.sh' "$WF" \
   && ok "diy 两段式已接入" || bad "workflow 未调用 diy 脚本"
+! grep -q 'package/luci-theme-argon' "$WF" \
+  && ok "workflow 不再 checkout argon 包（主题走 design 拉库）" \
+  || bad "workflow 仍 checkout package/luci-theme-argon（会与 design 抢主题）"
 ! grep -qi 'wifi_diag\|CONFIG_DEVMEM' "$WF" \
   && ok "无诊断模式残留" || bad "workflow 仍有 wifi_diag/DEVMEM"
 ! grep -q 'matrix:' "$WF" \

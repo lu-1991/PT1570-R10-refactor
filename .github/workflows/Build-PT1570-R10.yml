@@ -183,10 +183,11 @@ jobs:
           git checkout -q "$HW_REF" -- target/linux/rtl9617c
 
           # 补齐 PON / WiFi / LED / LuCI 包与工具修复（refactor 分支没有这些）。
+          # 不再 checkout argon 主题包：主题已改为 design，
+          # 由 diy-part1.sh 调 scripts/overlay-theme.sh 直接拉库编译。
           git checkout -q "$HW_REF" -- \
             package/tyfza1-pon-control \
             package/luci-app-tyfza1-pon \
-            package/luci-theme-argon \
             package/pt1500-storage \
             tools/mtd-utils/Makefile \
             package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh \

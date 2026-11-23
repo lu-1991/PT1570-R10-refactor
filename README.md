@@ -129,12 +129,15 @@ checkout → CRLF 归一化 → 释放磁盘/装依赖 → 克隆上游(锁 comm
   会被 overlay 直接覆盖）。
 - **主题与软件包口径（按用户要求）**：本仓库只保留 PT1570-R10 核心功能 ——
   PON 拨号 + 4×GE + 双频 WiFi + LuCI 中文 + USB/存储 + LED/按键 + UTC+8。
-  主题沿用 **argon**（`luci-theme-argon`，来自 kenzok8 feed + 上游 profile 强选），
-  默认主题由厂商 pon 包的 `97-rtl9617c-argon-default` 设定，无需额外脚本。
-  未拉 Fluent、未启用 tailscale / samba / vsftpd / upnp / wol —— 这些是定制项，
+  主题已由 argon 换成 **design**（`luci-theme-design`，`0x676e67/luci-theme-design`
+  的 main/lua 版，`diy-part1.sh` 调 `scripts/overlay-theme.sh` 直接拉库编译，
+  锁 commit `5cea733`）。默认主题由包自带 `30_luci-theme-design` 设定。
+  厂商的两处 argon 设置都已删除：workflow 不再 checkout `luci-theme-argon` 包，
+  PON 包里的 `95-tyfza1-argon` / `97-tyfza1-argon-default` 由 overlay 脚本删除
+  （这两个脚本序号靠后，会抢走 design 的默认主题）。
+  未启用 tailscale / samba / vsftpd / upnp / wol —— 这些是定制项，
   需要时在 `configs/youhua_pt1570-r10.config` 里加 `CONFIG_PACKAGE_*` 即可
-  （`diy-part2` 第 5/6 节会重新断言防丢包；加 Fluent 之类的外部主题还要在
-  `diy-part2.sh [1d]` 恢复拉库步骤）。主题一律走包构建，不以静态文件注入 `files/`。
+  （`diy-part2` 第 5/6 节会重新断言防丢包）。主题一律走包构建，不以静态文件注入 `files/`。
 
 > ⚠️ GitHub 单仓库缓存配额 **10 GB**（LRU 淘汰）。四层缓存全量约 7–8 GB，正常够用。
 > 如果发现 dl 缓存老是被挤掉，优先调小 `CCACHE_MAXSIZE`（workflow 顶部 env，默认 1200M）。
@@ -237,8 +240,9 @@ Actions 日志里 `Restore toolchain & host tools cache` 是否显示 `Cache res
 2. `fetch $HARDWARE_REF`，用它的**整棵** `target/linux/rtl9617c` 替换 refactor 的
    （`rm -rf` 再 `git checkout $HW_REF -- target/linux/rtl9617c`）——保证驱动、内核 patch、
    dtsi 内部一致，net 层拆分不进入。
-3. 补齐 refactor 没有的包：`tyfza1-pon-control`、`luci-app-tyfza1-pon`、`luci-theme-argon`、
+3. 补齐 refactor 没有的包：`tyfza1-pon-control`、`luci-app-tyfza1-pon`、
    `pt1500-storage`、`tools/mtd-utils/Makefile`、wifi-scripts 的 ucode 文件。
+   （argon 主题包已去掉，design 由 diy-part1 的 overlay-theme.sh 直接拉库。）
 4. 之后 diy-part1/2 的全部注入逻辑原样运行（它们依赖的正是 20b4cf4 形态的源码树）。
 
 这样 refactor 是名副其实的 git 基线，而真机验证过的驱动/修复一个不少。

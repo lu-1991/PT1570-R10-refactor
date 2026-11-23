@@ -138,8 +138,12 @@ if grep -qE "htmode='?[A-Z]+[0-9]+|channel='?[0-9]+" "$WIFI24"; then
 fi
 echo "✅ 2.4G 开机兜底脚本就位：$WIFI24"
 
-echo "---- [1d/7] 主题：argon ----"
-echo "✅ 主题沿用 argon（Fluent 拉库已按用户要求移除）"
+echo "---- [1d/7] 主题：design（拉库） ----"
+# diy-part1.sh 已调 overlay-theme.sh：拉库 luci-theme-design（锁 SHA）、
+# 删除厂商 PON 包里 95/97 两个 argon 默认主题脚本，design 自带 30 号脚本设默认。
+grep -q '^CONFIG_PACKAGE_luci-theme-design=y$' .config \
+  || echo "CONFIG_PACKAGE_luci-theme-design=y" >> .config
+echo "✅ 主题 design（0x676e67/luci-theme-design，直接拉库）；argon 已移除"
 
 echo "---- [2/7] apk 源声明 ----"
 # ---- 2. apk 源声明 ----
@@ -219,7 +223,7 @@ sed -i 's|^CONFIG_PACKAGE_uboot-envtools=y|# CONFIG_PACKAGE_uboot-envtools is no
 make defconfig
 # defconfig 会丢掉未被 profile 显式点名的包；这里按本仓库配置口径重新断言。
 for sym in tyfza1-pon-control luci-ssl uhttpd fitblk \
-           luci-theme-argon luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
+           luci-theme-design luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
            wpad-mbedtls wifi-scripts iw wireless-regdb \
            kmod-usb3 kmod-usb-storage kmod-usb-storage-uas \
            kmod-fs-ext4 kmod-fs-vfat kmod-nls-utf8 kmod-gpio-button-hotplug \
@@ -268,7 +272,7 @@ else
   echo "  OK   initramfs-recovery 已关闭"
 fi
 for sym in tyfza1-pon-control luci-ssl uhttpd fitblk \
-           luci-theme-argon luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
+           luci-theme-design luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
            wpad-mbedtls wifi-scripts iw wireless-regdb \
            kmod-usb3 kmod-usb-storage kmod-usb-storage-uas \
            kmod-fs-ext4 kmod-fs-vfat kmod-nls-utf8 kmod-gpio-button-hotplug \
@@ -277,14 +281,21 @@ for sym in tyfza1-pon-control luci-ssl uhttpd fitblk \
     || fail "$sym 在两次 defconfig 后被丢弃"
   echo "  OK   $sym"
 done
-# 主题沿用 argon（用户配置口径）：由 profile 的 DEVICE_PACKAGES 强选 + 厂商
-# 97-rtl9617c-argon-default 设为默认主题。未拉 Fluent，files/ 里也不应残留其脚本。
+# 主题口径：design（拉库编译）+ 包自带 30_luci-theme-design 设默认；
+# argon 包与厂商 95/97 抢主题脚本已在 diy-part1 的 overlay-theme.sh 里清除。
+grep -q '^CONFIG_PACKAGE_luci-theme-design=y$' .config \
+  || fail "CONFIG_PACKAGE_luci-theme-design 在两次 defconfig 后被丢弃"
+echo "  OK   CONFIG_PACKAGE_luci-theme-design=y"
+! grep -q 'CONFIG_PACKAGE_luci-theme-argon=y' .config \
+  || fail "不应启用 luci-theme-argon（与 design 抢默认主题）"
+echo "  OK   luci-theme-argon 未启用"
 ! grep -q 'CONFIG_PACKAGE_luci-theme-fluent=y' .config \
-  || fail "不应启用 luci-theme-fluent（本仓库配置口径为 argon）"
-echo "  OK   主题沿用 argon（无 Fluent）"
+  || fail "不应启用 luci-theme-fluent（本仓库配置口径为 design）"
+echo "  OK   无 Fluent"
 
 # files/ 不应残留任何静态主题目录（htdocs/htdocs/luci-static 等），主题一律走包构建
-find files \( -iname '*vantage*' -o -iname '*fluent*' -o -iname '*argon*' \) \
+find files \( -iname '*vantage*' -o -iname '*fluent*' -o -iname '*argon*' \
+              -o -iname '*design*' \) \
   ! -path '*/etc/uci-defaults/*' \
   -print -quit 2>/dev/null | grep -q . \
   && fail "files/ 里残留静态主题文件（应删除，主题走包构建）"
