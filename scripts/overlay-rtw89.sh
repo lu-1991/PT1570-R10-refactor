@@ -94,13 +94,47 @@ if drv.exists():
     print('  已删除 rtl_ax_ap 驱动目录')
 else:
     print('  rtl_ax_ap 驱动目录不存在，跳过')
+
+# 删除 modules.mk 里整个 KernelPackage/rtl-ax-ap 定义块（否则打包阶段找不到
+# rtl_ax_ap.ko 报 "module is missing"）。保留其它 KernelPackage（如 usb-led）。
+mods = wrt / "target/linux/rtl9617c/modules.mk"
+if mods.exists():
+    src = mods.read_text(encoding='utf-8')
+    start = src.find('define KernelPackage/rtl-ax-ap')
+    end_marker = '$(eval $(call KernelPackage,rtl-ax-ap))'
+    end = src.find(end_marker)
+    if start != -1 and end != -1:
+        end += len(end_marker)
+        # 连带吃掉块后的空行
+        while end < len(src) and src[end] == '\n':
+            end += 1
+        mods.write_text(src[:start] + src[end:], encoding='utf-8', newline='\n')
+        print('  modules.mk 已删除 KernelPackage/rtl-ax-ap 块')
+    else:
+        print('  modules.mk 无 rtl-ax-ap 块，跳过')
+else:
+    print('  modules.mk 不存在，跳过')
+
+# 从 image/Makefile 的 DEVICE_PACKAGES 移除 kmod-rtl-ax-ap（两个硬件层模板 Device）。
+img = wrt / "target/linux/rtl9617c/image/Makefile"
+if img.exists():
+    txt = img.read_text(encoding='utf-8')
+    n = txt.count('kmod-rtl-ax-ap')
+    if n:
+        txt = txt.replace('kmod-rtl-ax-ap ', '').replace(' kmod-rtl-ax-ap', '')
+        img.write_text(txt, encoding='utf-8', newline='\n')
+        print(f'  image/Makefile 移除 kmod-rtl-ax-ap {n} 处')
 PY
-# 断言：201 补丁和内核树里都不能再有 rtl_ax_ap / RTL_AX_AP 引用
+# 断言：内核 target 树里不能再有任何 rtl_ax_ap / kmod-rtl-ax-ap 引用
 ! grep -rq 'rtl_ax_ap' "$WRT/target/linux/rtl9617c/patches-6.18/" \
-  || fail "201 补丁仍有 rtl_ax_ap 引用（内核会重新编译旧驱动）"
+  || fail "补丁仍有 rtl_ax_ap 引用（内核会重新编译旧驱动）"
 ! grep -rq 'CONFIG_RTL_AX_AP' "$WRT/target/linux/rtl9617c/files-6.18/drivers/net/wireless/" \
   || fail "内核源码树仍有 CONFIG_RTL_AX_AP 引用"
-echo "  内核树已无 rtl_ax_ap 驱动（RTL_AX_AP 符号不再存在）"
+! grep -q 'KernelPackage/rtl-ax-ap' "$WRT/target/linux/rtl9617c/modules.mk" \
+  || fail "modules.mk 仍有 kmod-rtl-ax-ap 包定义（打包阶段找不到 .ko）"
+! grep -q 'kmod-rtl-ax-ap' "$WRT/target/linux/rtl9617c/image/Makefile" \
+  || fail "image/Makefile 仍引用 kmod-rtl-ax-ap"
+echo "  内核树已彻底无 rtl_ax_ap 驱动（Kconfig/Makefile/包/镜像依赖全清）"
 
 # ---- 3. 内核 config ----
 # 硬件层 config 默认：CONFIG_RTL_AX_AP=m，NVMEM 全关。rtw89 必须反过来。
