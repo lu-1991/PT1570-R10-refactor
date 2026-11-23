@@ -358,6 +358,12 @@ grep -q 'PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x0192)' "$DRV/rtw8192xbe.c" \
   && ok "8192XBE (0x0192) 2.4G 设备 ID 在位" || bad "8192XBE 设备 ID 缺失"
 grep -q 'RTL8192XB' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
   && ok "740 补丁含 RTL8192XB 支持" || bad "740 补丁缺 RTL8192XB"
+# 板级 NCTL 提前初始化：官方把 NCTL 放在 core_start（太晚），首条 H2C
+# (setup_phycap GET_FEATURE) 会 c2h timeout -> probe -110。必须在 efuse 之后、
+# setup_phycap 之前调用 early NCTL，否则真机芯片初始化失败无 WLAN。
+grep -q 'rtw89_phy_init_rf_nctl_early' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
+  && ok "740 补丁含早期 NCTL 初始化函数" \
+  || bad "740 补丁缺 rtw89_phy_init_rf_nctl_early（H2C 握手会超时）"
 # 固件编内核（built-in rtw89/cfg80211 早期 probe 根因修复）：真机日志证实驱动
 # 依次请求 -2/-1/.bin、cfg80211 请求 regulatory.db，全在 rootfs 挂载前，缺一个就
 # sysfs fallback 卡 60s -> probe -22 无 WLAN。故 EXTRA_FIRMWARE 必须列全 6 个。
