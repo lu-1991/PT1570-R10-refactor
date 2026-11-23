@@ -1,0 +1,177 @@
+--- a/drivers/net/wireless/realtek/rtw89/core.h
++++ b/drivers/net/wireless/realtek/rtw89/core.h
+@@ -153,6 +153,7 @@ enum rtw89_core_chip_id {
+ 	RTL8852C,
+ 	RTL8851B,
+ 	RTL8922A,
++	RTL8192XB,
+ };
+ 
+ enum rtw89_chip_gen {
+--- a/drivers/net/wireless/realtek/rtw89/Kconfig
++++ b/drivers/net/wireless/realtek/rtw89/Kconfig
+@@ -121,6 +121,20 @@ config RTW89_8852CE
+ 
+ 	  802.11ax PCIe wireless network (Wi-Fi 6E) adapter
+ 
++config RTW89_8192XB
++	tristate
++
++config RTW89_8192XBE
++	tristate "Realtek 8192XBE PCI wireless network (Wi-Fi 6) adapter"
++	depends on PCI
++	select RTW89_CORE
++	select RTW89_PCI
++	select RTW89_8192XB
++	help
++	  Select this option will enable support for 8192XBE chipset
++
++	  802.11ax PCIe wireless network (Wi-Fi 6) adapter
++
+ config RTW89_8922AE
+ 	tristate "Realtek 8922AE/8922AE-VS PCI wireless network (Wi-Fi 7) adapter"
+ 	depends on PCI
+--- a/drivers/net/wireless/realtek/rtw89/Makefile
++++ b/drivers/net/wireless/realtek/rtw89/Makefile
+@@ -18,7 +18,8 @@ rtw89_core-y += core.o \
+ 		chan.o \
+ 		ser.o \
+ 		acpi.o \
+-		util.o
++		util.o \
++		rtw89_factory.o
+ 
+ rtw89_core-$(CONFIG_PM) += wow.o
+ 
+@@ -82,6 +83,13 @@ rtw89_8922a-objs := rtw8922a.o \
+ obj-$(CONFIG_RTW89_8922AE) += rtw89_8922ae.o
+ rtw89_8922ae-objs := rtw8922ae.o
+ 
++obj-$(CONFIG_RTW89_8192XB) += rtw89_8192xb.o
++rtw89_8192xb-objs := rtw8192xb.o \
++		     rtw8192xb_table.o
++
++obj-$(CONFIG_RTW89_8192XBE) += rtw89_8192xbe.o
++rtw89_8192xbe-objs := rtw8192xbe.o
++
+ rtw89_core-$(CONFIG_RTW89_DEBUG) += debug.o
+ 
+ obj-$(CONFIG_RTW89_PCI) += rtw89_pci.o
+--- a/drivers/net/wireless/realtek/rtw89/mac.c
++++ b/drivers/net/wireless/realtek/rtw89/mac.c
+@@ -1585,7 +1585,7 @@ static int dmac_func_en_ax(struct rtw89_
+ 	enum rtw89_core_chip_id chip_id = rtwdev->chip->chip_id;
+ 	u32 val32;
+ 
+-	if (chip_id == RTL8852C)
++	if (chip_id == RTL8852C || chip_id == RTL8192XB)
+ 		val32 = (B_AX_MAC_FUNC_EN | B_AX_DMAC_FUNC_EN |
+ 			 B_AX_MAC_SEC_EN | B_AX_DISPATCHER_EN |
+ 			 B_AX_DLE_CPUIO_EN | B_AX_PKT_IN_EN |
+--- a/drivers/net/wireless/realtek/rtw89/pci.c
++++ b/drivers/net/wireless/realtek/rtw89/pci.c
+@@ -2559,7 +2559,7 @@ static int rtw89_pci_deglitch_setting(st
+ 					     PCIE_PHY_GEN2);
+ 		if (ret)
+ 			return ret;
+-	} else if (chip_id == RTL8852C) {
++	} else if (chip_id == RTL8852C || chip_id == RTL8192XB) {
+ 		rtw89_write16_clr(rtwdev, R_RAC_DIRECT_OFFSET_G1 + RAC_ANA24 * 2,
+ 				  B_AX_DEGLITCH);
+ 		rtw89_write16_clr(rtwdev, R_RAC_DIRECT_OFFSET_G2 + RAC_ANA24 * 2,
+@@ -2712,7 +2712,8 @@ static void rtw89_pci_hci_ldo(struct rtw
+ 				  B_AX_PCIE_DIS_L2_CTRL_LDO_HCI);
+ 		rtw89_write32_clr(rtwdev, R_AX_SYS_SDIO_CTRL,
+ 				  B_AX_PCIE_DIS_WLSUS_AFT_PDN);
+-	} else if (rtwdev->chip->chip_id == RTL8852C) {
++	} else if (rtwdev->chip->chip_id == RTL8852C ||
++		   rtwdev->chip->chip_id == RTL8192XB) {
+ 		rtw89_write32_clr(rtwdev, R_AX_SYS_SDIO_CTRL,
+ 				  B_AX_PCIE_DIS_L2_CTRL_LDO_HCI);
+ 	}
+@@ -2813,7 +2814,8 @@ static void rtw89_pci_set_io_rcy(struct
+ 	const struct rtw89_pci_info *info = rtwdev->pci_info;
+ 	u32 val32;
+ 
+-	if (rtwdev->chip->chip_id != RTL8852C)
++	if (rtwdev->chip->chip_id != RTL8852C &&
++	    rtwdev->chip->chip_id != RTL8192XB)
+ 		return;
+ 
+ 	if (info->io_rcy_en == MAC_AX_PCIE_ENABLE) {
+@@ -2871,12 +2873,14 @@ static void rtw89_pci_clr_idx_all_ax(str
+ 	u32 rxbd_rwptr_clr = info->rxbd_rwptr_clr_reg;
+ 	u32 txbd_rwptr_clr2 = info->txbd_rwptr_clr2_reg;
+ 
+-	if (chip_id == RTL8852A || chip_id == RTL8852C)
++	if (chip_id == RTL8852A || chip_id == RTL8852C ||
++	    chip_id == RTL8192XB)
+ 		val |= B_AX_CLR_ACH4_IDX | B_AX_CLR_ACH5_IDX |
+ 		       B_AX_CLR_ACH6_IDX | B_AX_CLR_ACH7_IDX;
+ 	/* clear DMA indexes */
+ 	rtw89_write32_set(rtwdev, R_AX_TXBD_RWPTR_CLR1, val);
+-	if (chip_id == RTL8852A || chip_id == RTL8852C)
++	if (chip_id == RTL8852A || chip_id == RTL8852C ||
++	    chip_id == RTL8192XB)
+ 		rtw89_write32_set(rtwdev, txbd_rwptr_clr2,
+ 				  B_AX_CLR_CH10_IDX | B_AX_CLR_CH11_IDX);
+ 	rtw89_write32_set(rtwdev, rxbd_rwptr_clr,
+@@ -2991,7 +2995,7 @@ static int rtw89_pci_mode_op(struct rtw8
+ 	if (chip_id == RTL8852A || rtw89_is_rtl885xb(rtwdev)) {
+ 		rtw89_write32_mask(rtwdev, R_AX_PCIE_INIT_CFG1, B_AX_PCIE_MAX_TXDMA_MASK, tx_burst);
+ 		rtw89_write32_mask(rtwdev, R_AX_PCIE_INIT_CFG1, B_AX_PCIE_MAX_RXDMA_MASK, rx_burst);
+-	} else if (chip_id == RTL8852C) {
++	} else if (chip_id == RTL8852C || chip_id == RTL8192XB) {
+ 		rtw89_write32_mask(rtwdev, R_AX_HAXI_INIT_CFG1, B_AX_HAXI_MAX_TXDMA_MASK, tx_burst);
+ 		rtw89_write32_mask(rtwdev, R_AX_HAXI_INIT_CFG1, B_AX_HAXI_MAX_RXDMA_MASK, rx_burst);
+ 	}
+@@ -3016,7 +3020,7 @@ static int rtw89_pci_mode_op(struct rtw8
+ 				   wd_dma_idle_intvl);
+ 		rtw89_write32_mask(rtwdev, R_AX_PCIE_INIT_CFG2, B_AX_WD_ITVL_ACT,
+ 				   wd_dma_act_intvl);
+-	} else if (chip_id == RTL8852C) {
++	} else if (chip_id == RTL8852C || chip_id == RTL8192XB) {
+ 		rtw89_write32_mask(rtwdev, R_AX_HAXI_INIT_CFG1, B_AX_WD_ITVL_IDLE_V1_MASK,
+ 				   wd_dma_idle_intvl);
+ 		rtw89_write32_mask(rtwdev, R_AX_HAXI_INIT_CFG1, B_AX_WD_ITVL_ACT_V1_MASK,
+@@ -4187,7 +4191,7 @@ static void rtw89_pci_clkreq_set_ax(stru
+ 		if (ret)
+ 			rtw89_err(rtwdev, "failed to %s CLKREQ_L1, ret=%d",
+ 				  enable ? "set" : "unset", ret);
+-	} else if (chip_id == RTL8852C) {
++	} else if (chip_id == RTL8852C || chip_id == RTL8192XB) {
+ 		rtw89_write32_set(rtwdev, R_AX_PCIE_LAT_CTRL,
+ 				  B_AX_CLK_REQ_SEL_OPT | B_AX_CLK_REQ_SEL);
+ 		if (enable)
+--- a/drivers/net/wireless/realtek/rtw89/rtw8852c.c
++++ b/drivers/net/wireless/realtek/rtw89/rtw8852c.c
+@@ -12,6 +12,7 @@
+ #include "rtw8852c.h"
+ #include "rtw8852c_rfk.h"
+ #include "rtw8852c_table.h"
++#include "rtw89_factory.h"
+ #include "sar.h"
+ #include "util.h"
+ 
+@@ -500,6 +501,7 @@ static int rtw8852c_read_efuse(struct rt
+ 			       enum rtw89_efuse_block block)
+ {
+ 	struct rtw89_efuse *efuse = &rtwdev->efuse;
++	struct rtw89_factory_cal *cal;
+ 	struct rtw8852c_efuse *map;
+ 
+ 	map = (struct rtw8852c_efuse *)log_map;
+@@ -519,6 +521,13 @@ static int rtw8852c_read_efuse(struct rt
+ 
+ 	rtw89_info(rtwdev, "chip rfe_type is %d\n", efuse->rfe_type);
+ 
++	cal = rtw89_factory_cal_get(rtwdev, RTW89_FACTORY_RADIO_5G);
++	if (cal) {
++		rtw89_factory_fill_efuse(efuse, cal);
++		rtw89_factory_fill_gain(rtwdev, cal);
++		rtw89_factory_fill_tssi(rtwdev, cal);
++	}
++
+ 	return 0;
+ }
+ 

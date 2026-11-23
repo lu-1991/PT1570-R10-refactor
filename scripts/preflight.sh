@@ -21,15 +21,17 @@ sec "1. 项目结构完整性"
 WF=$(find .github/workflows -maxdepth 1 -name '*.yml' -o -maxdepth 1 -name '*.yaml' 2>/dev/null | head -1)
 for f in diy-part1.sh diy-part2.sh \
          configs/youhua_pt1570-r10.config \
-         scripts/apply-board.sh scripts/overlay-wifi-driver.sh \
-         scripts/patch-upstream.sh scripts/verify-rf-tables.py \
-         scripts/verify-fit-boot.py \
+         scripts/apply-board.sh scripts/overlay-rtw89.sh \
+         scripts/patch-upstream.sh scripts/verify-fit-boot.py \
          board/dts/rtl9617c-pt1570-r10.dts board/devices/pt1570-r10.mk.inc \
          files/etc/uci-defaults/96-pt1570-r10-leds \
          files/etc/uci-defaults/97-pt1570-r10-wifi24 \
          files/etc/uci-defaults/98-pt1570-r10-wifi-stability \
          files/etc/uci-defaults/99-pt1570-fit \
-         files/etc/modules.d/50-rtl-ax-ap \
+         board/rtw89/driver/rtw89_factory.c \
+         board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
+         files/lib/firmware/rtw89/rtw8192xb_fw.bin \
+         files/lib/firmware/rtw89/rtw8852c_fw.bin \
          files/etc/hotplug.d/ieee80211/10-wifi-detect \
          files/etc/uci-defaults/92-pt1570-r10-wifi-default \
          files/etc/uci-defaults/92-pt1570-r10-wireless-country \
@@ -126,11 +128,15 @@ grep -q '^CONFIG_PACKAGE_luci-theme-argon=y$' "$CFG" \
   && ok "未含 tailscale/samba/vsftpd/upnp/wol（用户配置口径）" \
   || bad "$CFG 含未约定的服务包（tailscale/samba/vsftpd/upnp/wol）"
 # 双频 WiFi / USB / LuCI 中文核心包断言（本仓库配置口径）
-for sym in CONFIG_PACKAGE_kmod-rtl-ax-ap=y CONFIG_PACKAGE_wpad-mbedtls=y \
+# rtw89 为内核 built-in，无 kmod 包；逆向 kmod-rtl-ax-ap 已移除。
+for sym in CONFIG_PACKAGE_wpad-mbedtls=y CONFIG_PACKAGE_iw=y \
            CONFIG_PACKAGE_kmod-usb-storage=y CONFIG_PACKAGE_ucode-mod-math=y \
            CONFIG_PACKAGE_luci-i18n-base-zh-cn=y; do
   grep -q "^${sym}$" "$CFG" && ok "$sym" || bad "$CFG 缺 $sym"
 done
+! grep -q '^CONFIG_PACKAGE_kmod-rtl-ax-ap=y$' "$CFG" \
+  && ok "逆向 kmod-rtl-ax-ap 已移除（rtw89 为内核 built-in）" \
+  || bad "$CFG 仍有 kmod-rtl-ax-ap（与 rtw89 抢 PCI 设备）"
 # 默认主题：argon 由厂商 97-rtl9617c-argon-default 设定；本仓库不应有 fluent 抢主题脚本
 [ ! -f files/etc/uci-defaults/98-pt1570-fluent-default ] \
   && ok "无 Fluent 默认主题脚本（argon 由厂商脚本设定）" \
@@ -334,22 +340,24 @@ else
 fi
 
 # ---------------------------------------------------------------
-sec "6. WiFi 驱动 overlay 资产完整性"
-DRV=board/wifi/rtl_ax_ap
-if [ -d "$DRV" ]; then
-  got=$(md5sum "$DRV/pe-tx-code.h" 2>/dev/null | cut -d' ' -f1)
-  [ "$got" = "7eb49893f43b897bf03fa82ae2323984" ] \
-    && ok "pe-tx-code.h = 参考 PE 版本" || bad "pe-tx-code.h md5 不符（$got）"
-  grep -q 'PT1570-RF-TABLE-QUIRK' "$DRV/limits.c" \
-    && ok "limits.c 含 PShape 空列兼容" || bad "limits.c 缺 PShape 兼容"
-  grep -q 'state->input_ready = false;' "$DRV/c-tssi.h" \
-    && grep -q 'state->input_ready = false;' "$DRV/xb-tssi.h" \
-    && ok "TSSI 缺表降级分支在位" || bad "TSSI 降级分支缺失（缺表会导致 probe 失败）"
-  ! grep -q 'pe-core\.o' "$DRV/Makefile" \
-    && ok "Makefile 无 pe-core.o 残留" || bad "Makefile 仍引用 pe-core.o"
-else
-  bad "缺 $DRV（overlay 无从谈起）"
-fi
+sec "6. rtw89 官方驱动资产完整性"
+DRV=board/rtw89/driver
+for f in rtw8192xb.c rtw8192xb.h rtw8192xb_table.c rtw8192xbe.c \
+         rtw89_factory.c rtw89_factory.h; do
+  [ -s "$DRV/$f" ] && ok "$f 在位" || bad "缺 rtw89 驱动文件 $f"
+done
+grep -q 'RTW89_FACTORY_MAGIC.*TYFC0003' "$DRV/rtw89_factory.c" \
+  && ok "rtw89 从 factory TYFC0003 读校准" || bad "rtw89_factory.c 无 TYFC0003 校准"
+grep -q 'PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x0192)' "$DRV/rtw8192xbe.c" \
+  && ok "8192XBE (0x0192) 2.4G 设备 ID 在位" || bad "8192XBE 设备 ID 缺失"
+grep -q 'RTL8192XB' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
+  && ok "740 补丁含 RTL8192XB 支持" || bad "740 补丁缺 RTL8192XB"
+# 只查生效行（忽略注释）：config 里允许有"已移除"的说明文字，
+# 但任何未注释的 kmod-rtl-ax-ap=y 或 overlay 调用都必须消失。
+! grep -qE '^[[:space:]]*CONFIG_PACKAGE_kmod-rtl-ax-ap=' configs/*.config \
+  && ok "构建链已无生效的 kmod-rtl-ax-ap" || bad "仍有生效的 kmod-rtl-ax-ap"
+! grep -q 'overlay-wifi-driver' diy-part1.sh diy-part2.sh \
+  && ok "diy 不再调用旧 overlay 脚本" || bad "diy 仍调用 overlay-wifi-driver.sh"
 
 # ---------------------------------------------------------------
 sec "7. factory 校准 284 字节（WiFi -EINVAL 的根因修复）"
@@ -454,9 +462,10 @@ FBC=files/lib/firmware/realtek/tyfza1/rtl8852ce/flash-calibration.factory-fallba
   && [ "$(head -c 8 "$FBC")" = "TYFC0003" ] \
   && ok "5G fallback 为 ITB 284B TYFC0003 平台校准" \
   || bad "5G fallback 非 284B TYFC0003"
-# 模块加载 + 首启 SSID 配置必须在位，且不引入默认 WAN。
-grep -q '^rtl_ax_ap$' files/etc/modules.d/50-rtl-ax-ap \
-  && ok "rtl_ax_ap 模块自动加载在位" || bad "50-rtl-ax-ap 未加载 rtl_ax_ap"
+# rtw89 为内核 built-in，不需要 modules.d 手动加载；旧的 rtl_ax_ap 加载项必须移除。
+[ ! -f files/etc/modules.d/50-rtl-ax-ap ] \
+  && ok "旧 rtl_ax_ap 模块加载项已移除" \
+  || bad "50-rtl-ax-ap 仍在（会 modprobe 不存在的 rtl_ax_ap）"
 grep -q 'PT1570-R10-5G-' files/etc/uci-defaults/92-pt1570-r10-wifi-default \
   && grep -q 'PT1570-R10-' files/etc/uci-defaults/92-pt1570-r10-wifi-default \
   && ok "首启双频 SSID 由 LAN MAC 生成" || bad "92-wifi-default 缺 SSID 派生逻辑"

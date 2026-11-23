@@ -59,8 +59,8 @@ env:
   # HARDWARE_REF = 硬件层来源。Clone 步骤会在 refactor 基线之上，把下列内容
   #   覆盖为 20b4cf4（feature/pt1500-h10-openwrt-fixes HEAD，2026-11-07）：
   #   target/linux/rtl9617c 整棵树 + PON/WiFi/LED/LuCI 包 + 工具修复。
-  #   这正是本仓库全部 CI 注入脚本（apply-board/patch-upstream/overlay-wifi-driver）
-  #   所依赖的源码形态，保证 net 层改动不进入、驱动又齐全。
+  #   这正是本仓库全部 CI 注入脚本（apply-board/patch-upstream/overlay-rtw89）
+  #   所依赖的源码形态：PON/4GE/LED 用硬件层，WiFi 则移植上游 rtw89 官方驱动。
   # 两个都写完整 40 位 SHA：git fetch --depth=1 origin <SHA> 精确检出，字节级可复现；
   # 用分支名会随上游前进而漂移，镜像内容与缓存 key（pt1570-tc-<SOURCE_HASH>-…）都会失效。
   SOURCE_REF: ${{ github.event.inputs.source_ref || 'ae4aeac45a70be1bdf68af65cbbacb360f201b27' }}
@@ -342,16 +342,18 @@ jobs:
           cat "$GITHUB_WORKSPACE/configs/youhua_pt1570-r10.config" >> .config
           bash "$GITHUB_WORKSPACE/diy-part2.sh"
 
-      # 射频表与驱动解析器强耦合，格式差一个空列真机就会 -EINVAL。
-      # 编译前用 Python 逐字段模拟驱动解析器，任何一张表过不去立即失败。
-      - name: Verify WiFi RF tables
+      # rtw89 官方驱动固件校验：rtw8192xb_fw.bin(2.4G) / rtw8852c_fw.bin(5G)
+      # 由内核驱动 request_firmware 从 /lib/firmware/rtw89/ 加载，缺一个就 probe 失败。
+      - name: Verify rtw89 firmware
         run: |
           set -e
-          T="$GITHUB_WORKSPACE/files/lib/firmware/realtek/tyfza1"
-          n=$(find "$T" -name '*.txt' | wc -l)
-          [ "$n" -ge 70 ] || { echo "::error::射频表数量 $n < 70（ITB 全量移植）"; exit 1; }
-          python3 "$GITHUB_WORKSPACE/scripts/verify-rf-tables.py" "$T"
-          echo "RF_TABLES_OK=True files=$n"
+          T="$GITHUB_WORKSPACE/files/lib/firmware/rtw89"
+          for fw in rtw8192xb_fw.bin rtw8852c_fw.bin; do
+            [ -s "$T/$fw" ] || { echo "::error::缺 rtw89 固件 $fw"; exit 1; }
+            sz=$(stat -c %s "$T/$fw")
+            [ "$sz" -gt 100000 ] || { echo "::error::$fw 大小异常 $sz"; exit 1; }
+          done
+          echo "RTW89_FIRMWARE_OK=True (2/2)"
 
       - name: Run static preflight
         working-directory: ${{ github.workspace }}
@@ -435,7 +437,7 @@ jobs:
       # =========================================================
       # 6. 产物校验：files/ 逐文件比对 rootfs + sysupgrade 可启动性
       # =========================================================
-      - name: Verify image payload (wifi firmware + RF tables + factory)
+      - name: Verify image payload (rtw89 firmware + rootfs scripts)
         working-directory: ${{ env.BUILD_ROOT }}/openwrt
         run: |
           python3 - <<'PY'
@@ -460,18 +462,14 @@ jobs:
           if missing:
               for kind, rel in missing[:20]:
                   print(f"::error::{kind}: {rel}")
-              sys.exit(f"ERROR: {len(missing)} 个文件缺失或不符（WiFi 固件/射频表未进镜像）")
+              sys.exit(f"ERROR: {len(missing)} 个文件缺失或不符（rtw89 固件/配置文件未进镜像）")
 
-          # 校准提取尺寸断言：驱动按 sizeof(struct rtl_ax_board_cal)=284 严格校验，
-          # 4096 整块提取会让 probe 直接 -EINVAL（真机已验证，这次无线全无的根因）。
-          # 防止旧版脚本混进镜像：284 必须在，4096 提取绝不允许出现。
-          script = (root / "etc/init.d/tyfza1-factory").read_text(encoding="utf-8", errors="replace")
-          for off, chip in (("0x2000", "rtl8852ce/5G"), ("0x3000", "rtl8192xbe/2.4G")):
-              if f"factory_blob $(({off})) 284" not in script:
-                  sys.exit(f"ERROR: tyfza1-factory 里 {chip} 校准不是 284 字节提取（{off}），旧版脚本？")
-          if "factory_blob $((" in script and ") 4096" in script:
-              sys.exit("ERROR: tyfza1-factory 仍含 4096 整块提取（会 -EINVAL，驱动只认 284）")
-          print("FACTORY_284_OK=True")
+          # rtw89 固件必须在镜像里（内核 request_firmware 从 /lib/firmware/rtw89 读）
+          for fw in ("rtw8192xb_fw.bin", "rtw8852c_fw.bin"):
+              fp = root / "lib/firmware/rtw89" / fw
+              if not fp.exists() or fp.stat().st_size < 100000:
+                  sys.exit(f"ERROR: 镜像里 rtw89 固件 {fw} 缺失或过小")
+          print("RTW89_FW_IN_IMAGE=True")
           bad_perm = []
           for f in files:
               rel = str(f.relative_to(assets))

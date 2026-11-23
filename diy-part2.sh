@@ -220,7 +220,7 @@ make defconfig
 # defconfig 会丢掉未被 profile 显式点名的包；这里按本仓库配置口径重新断言。
 for sym in tyfza1-pon-control luci-ssl uhttpd fitblk \
            luci-theme-argon luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
-           kmod-rtl-ax-ap wpad-mbedtls wifi-scripts iw wireless-regdb \
+           wpad-mbedtls wifi-scripts iw wireless-regdb \
            kmod-usb3 kmod-usb-storage kmod-usb-storage-uas \
            kmod-fs-ext4 kmod-fs-vfat kmod-nls-utf8 kmod-gpio-button-hotplug \
            ucode-mod-math; do
@@ -269,7 +269,7 @@ else
 fi
 for sym in tyfza1-pon-control luci-ssl uhttpd fitblk \
            luci-theme-argon luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
-           kmod-rtl-ax-ap wpad-mbedtls wifi-scripts iw wireless-regdb \
+           wpad-mbedtls wifi-scripts iw wireless-regdb \
            kmod-usb3 kmod-usb-storage kmod-usb-storage-uas \
            kmod-fs-ext4 kmod-fs-vfat kmod-nls-utf8 kmod-gpio-button-hotplug \
            ucode-mod-math; do
@@ -319,12 +319,17 @@ for bad in kmod-mac80211 kmod-cfg80211 kmod-mt7915e kmod-mt76-core \
 done
 echo "  OK   无 mediatek/openwrt_one 残留包"
 
-# WiFi 驱动 overlay 核验：PE 头必须是已 revert 的参考版（4076 words）
-DST=target/linux/rtl9617c/files-6.18/drivers/net/wireless/realtek/rtl_ax_ap
-got=$(md5sum "$DST/pe-tx-code.h" | cut -d' ' -f1)
-[ "$got" = "7eb49893f43b897bf03fa82ae2323984" ] \
-  || fail "pe-tx-code.h md5=$got，参考版 PE 程序未生效"
-echo "  OK   rtl_ax_ap = PT1570 verified version"
+# rtw89 官方驱动核验（diy-part1 的 overlay-rtw89.sh 已落地）
+DST=target/linux/rtl9617c/files-6.18/drivers/net/wireless/realtek/rtw89
+[ -f "$DST/rtw89_factory.c" ] && [ -f "$DST/rtw8192xb.c" ] \
+  || fail "rtw89 驱动源码未落地（overlay-rtw89.sh 失败？）"
+grep -q '^CONFIG_RTW89_8192XBE=y$' target/linux/rtl9617c/config-6.18 \
+  || fail "config-6.18 缺 CONFIG_RTW89_8192XBE=y"
+grep -q '^CONFIG_MTD_UBI_NVMEM=y$' target/linux/rtl9617c/config-6.18 \
+  || fail "config-6.18 缺 CONFIG_MTD_UBI_NVMEM=y（factory 校准读不到）"
+grep -q 'wifi_cal_radio1' target/linux/rtl9617c/dts/rtl9617c-pt1570-r10.dts \
+  || fail "R10 DTS 未绑定 factory 校准 cell"
+echo "  OK   rtw89 官方驱动 + factory nvmem 校准链路"
 
 echo "===== key config ====="
 grep -E '^CONFIG_TARGET_(BOARD|SUBTARGET)=' .config || true

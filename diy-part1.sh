@@ -7,12 +7,12 @@
 #
 # 本脚本做三件事（全部幂等，重复执行安全）：
 #   1) 注入 PT1570-R10 板级支持（DTS + image/Makefile + sysupgrade 白名单）
-#   2) 把 rtl_ax_ap 驱动整套替换为已真机验证的 PT1570 版本
-#      （PE IRAM revert；含 pe-tx-code.h，md5 校验在 overlay 脚本内）
-#      ⚠️ 因此 workflow 不再需要 "Build PE firmware" 现场编译步骤——
-#         那一步编出的正是已知坏版 PE 头文件，会被这里直接覆盖。
-#   3) 修补上游包内脚本（tyfza1-factory：flash-calibration.bin 必须是
-#      精确 284 字节，4096 会 -EINVAL 导致两颗 WiFi 芯片 probe 失败）
+#   2) 移植上游官方 rtw89 驱动（替换逆向 rtl_ax_ap 方案）：
+#      驱动源码 + 内核补丁 740 + config（rtw89 on / rtl_ax_ap off / NVMEM on）
+#      + DTS factory 校准 cell 绑定。rtw89 直读 factory 卷的 TYFC0003，
+#      绕开逆向驱动的 PE/TSSI/RFE50/symlink/284 字节一连串坑。
+#   3) 修补上游包内脚本（fitblk 上限 + R10 面板端口命名），
+#      校准提取脚本 tyfza1-factory 仅供 PON/BOSA 使用，不再参与 WiFi。
 # ================================================================
 set -euo pipefail
 
@@ -34,10 +34,10 @@ test -f "$WRT/package/base-files/files/bin/config_generate" \
 PT1570_BOARD="$BOARD" ASSETS="$ASSETS" WRT="$WRT" DTS_STATUS="$DTS_STATUS" \
   bash "$ASSETS/scripts/apply-board.sh"
 
-# ---- 2. WiFi 驱动 overlay（必须在任何 make 之前：内核展开 files-6.18 要用）----
-ASSETS="$ASSETS" WRT="$WRT" bash "$ASSETS/scripts/overlay-wifi-driver.sh"
+# ---- 2. rtw89 官方 WiFi 驱动移植（必须在任何 make 之前：内核展开 files-6.18 要用）----
+ASSETS="$ASSETS" WRT="$WRT" bash "$ASSETS/scripts/overlay-rtw89.sh"
 
-# ---- 3. 上游包内修补（factory 校准提取 284 字节）----
+# ---- 3. 上游包内修补（fitblk 上限 / R10 端口命名）----
 ASSETS="$ASSETS" WRT="$WRT" bash "$ASSETS/scripts/patch-upstream.sh"
 
 echo "🎉 diy-part1.sh 完成"

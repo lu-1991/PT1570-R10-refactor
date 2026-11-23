@@ -22,6 +22,26 @@
 - 验证状态：**PT1570-R10 已真机验证**（启动 / 4×GE / 双频无线 / PPPoE 拨号 / 面板灯）
   - 注：固件**不带默认 WAN**（pon0.1101 / PPPoE / PON FE 已全部去掉），首次开机需自行配置上网；上述 PPPoE 拨号指真机验证过该能力，非出厂预设。
 
+> ### ⚠️ WiFi 方案已切换为官方 rtw89（2026-11-23）
+>
+> **当前方案**：移植上游 refactor `fd909a3` 的 **rtw89 官方内核驱动**
+> （`CONFIG_RTW89=y` 系列，built-in），替代此前逆向的 `rtl_ax_ap`。
+> - 驱动源码：`board/rtw89/driver/`（6 个文件，来自上游 5ba60e0）
+> - 内核补丁：`board/rtw89/patches/740-wifi-rtw89-8192xb.patch`
+> - 固件：`files/lib/firmware/rtw89/`（`rtw8192xb_fw.bin` 2.4G / `rtw8852c_fw.bin` 5G）
+> - 校准：**直读 factory 卷的 nvmem cell**（`wifi_cal_radio0`@0x2000=5G /
+>   `radio1`@0x3000=2.4G），R10 DTS 里 `&pcie0/&pcie1` 已绑定；不再依赖
+>   `/tmp/tyfza1-factory` 软链、284 字节截断、fallback 兜底。
+> - 注入脚本：`scripts/overlay-rtw89.sh`（diy-part1 调用）。
+>
+> **切换原因**：逆向 `rtl_ax_ap` 在 2.4G 上踩 PE/TSSI/RFE50/symlink/284 字节/regdb
+> 一连串坑，真机始终搜不到 2.4G SSID；官方 rtw89 从根上绕开这些环节。
+>
+> **下方 §6.1 / §10 等章节描述的 `rtl_ax_ap` + 70 张射频表为历史方案**，
+> 相关 `files/lib/firmware/realtek/tyfza1/` 资产保留仅为回退方便，
+> **不再参与编译**（`kmod-rtl-ax-ap` 已从 config 移除，`50-rtl-ax-ap` 已删除）。
+> rtw89 方案尚未真机验证，若出现问题可直接回退到切换前的 commit。
+
 ---
 
 ## 1. 硬件规格
