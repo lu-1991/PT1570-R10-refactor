@@ -74,26 +74,16 @@ echo "  内核补丁 740-wifi-rtw89-8192xb.patch 已落地"
 # 只要这两行在，内核 Kconfig 就有 RTL_AX_AP 符号，syncconfig 在缺值时按
 # tristate 默认重新打开(=m)，进而编译 rtl_ax_ap 并撞上已删除的 pe-tx-code.h
 # （CI 连续两次同一报错）。改 config 的 not-set 不可靠——syncconfig 会覆盖。
-# 彻底解法：从补丁里删掉这两行 + 删除驱动目录，让内核根本看不到该符号。
+# 彻底解法：整个删除 201 补丁（它全部内容就是接 rtl_ax_ap，无其它改动）+ 删除驱动
+# 目录，让内核根本看不到该符号。注意不能只逐行删 + 行——那会破坏 hunk 的 @@ 行数
+# 计数导致 "malformed patch"（CI 已踩）。删整文件最干净。
 python3 - "$WRT" <<'PY'
 import pathlib, sys
 wrt = pathlib.Path(sys.argv[1])
 patch = wrt / "target/linux/rtl9617c/patches-6.18/201-native-radio.patch"
 if patch.exists():
-    lines = patch.read_text(encoding="utf-8", errors="replace").splitlines()
-    out = []
-    removed = 0
-    for ln in lines:
-        s = ln.strip()
-        if s == '+source "drivers/net/wireless/realtek/rtl_ax_ap/Kconfig"':
-            removed += 1
-            continue
-        if s.startswith('+obj-$(CONFIG_RTL_AX_AP)'):
-            removed += 1
-            continue
-        out.append(ln)
-    patch.write_text('\n'.join(out) + '\n', encoding='utf-8', newline='\n')
-    print(f'  201 补丁移除 rtl_ax_ap 注入 {removed} 行')
+    patch.unlink()
+    print('  已删除 201-native-radio.patch（rtl_ax_ap 内核注入整套）')
 else:
     print('  201 补丁不存在，跳过')
 
