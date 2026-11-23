@@ -2,45 +2,14 @@
 
 友华 **PT1570-R10**（Realtek **RTL9617C**）的 OpenWrt FIT 固件云编译仓库。
 
-> **本仓库配置口径**：按用户要求，结构和编译方式沿用已真机验证的 `PT1570-R10-CI`
-> 方案（两段式 diy / board+files+scripts 注入层 / 完整校验 / 缓存 / 滚动 Release），
-> 软件包集合则保持核心功能口径：**PON 拨号 + 4×GE + 双频 WiFi + LuCI 中文 +
-> USB/存储 + LED/按键 + UTC+8，argon 主题**；不含 tailscale / samba / vsftpd /
-> upnp / wol / Fluent。需要这些服务时按第 5.2 节说明在 config 里追加即可。
-
 采用 P3TERX `Actions-OpenWrt` 的"定制层"思路：**本仓库不存 OpenWrt 源码**，只放板级
 支持、驱动 overlay、rootfs 默认值和防回归断言；GitHub Actions 在 runner 上克隆上游源码、
 注入定制、编译、校验产物，最后发布到 Release。
 
 - 上游基座（**双基线**）：`lyq1996/rtl9617c-openwrt`
-  - **克隆基线 = `refactor` @ `ae4aeac`**（2026-11-19，用户指定；完整 40 位 SHA）
+  - **克隆基线 = `refactor`
   - **硬件层 = `20b4cf4`**（分支 `feature/pt1500-h10-openwrt-fixes` HEAD，2026-11-07，
     `pon: apply EPON queues per queue like stock`）——编译时在 refactor 之上叠加
-  - 原因：refactor 是 net 层 ni/fe 拆分的新线，但删掉了 PCIe/WiFi/USB/LED 驱动与 4GE DTS，
-    单独用编不出完整固件；叠加已真机验证的 20b4cf4 硬件层补齐，详见 §11
-- 产物形态：**FIT ABI + squashfs + UBI**，`root=/dev/fit0`（固件自洽，不依赖 bootloader 注入）
-- 验证状态：**PT1570-R10 已真机验证**（启动 / 4×GE / 双频无线 / PPPoE 拨号 / 面板灯）
-  - 注：固件**不带默认 WAN**（pon0.1101 / PPPoE / PON FE 已全部去掉），首次开机需自行配置上网；上述 PPPoE 拨号指真机验证过该能力，非出厂预设。
-
-> ### ⚠️ WiFi 方案已切换为官方 rtw89（2026-11-23）
->
-> **当前方案**：移植上游 refactor `fd909a3` 的 **rtw89 官方内核驱动**
-> （`CONFIG_RTW89=y` 系列，built-in），替代此前逆向的 `rtl_ax_ap`。
-> - 驱动源码：`board/rtw89/driver/`（6 个文件，来自上游 5ba60e0）
-> - 内核补丁：`board/rtw89/patches/740-wifi-rtw89-8192xb.patch`
-> - 固件：`files/lib/firmware/rtw89/`（`rtw8192xb_fw.bin` 2.4G / `rtw8852c_fw.bin` 5G）
-> - 校准：**直读 factory 卷的 nvmem cell**（`wifi_cal_radio0`@0x2000=5G /
->   `radio1`@0x3000=2.4G），R10 DTS 里 `&pcie0/&pcie1` 已绑定；不再依赖
->   `/tmp/tyfza1-factory` 软链、284 字节截断、fallback 兜底。
-> - 注入脚本：`scripts/overlay-rtw89.sh`（diy-part1 调用）。
->
-> **切换原因**：逆向 `rtl_ax_ap` 在 2.4G 上踩 PE/TSSI/RFE50/symlink/284 字节/regdb
-> 一连串坑，真机始终搜不到 2.4G SSID；官方 rtw89 从根上绕开这些环节。
->
-> **下方 §6.1 / §10 等章节描述的 `rtl_ax_ap` + 70 张射频表为历史方案**，
-> 相关 `files/lib/firmware/realtek/tyfza1/` 资产保留仅为回退方便，
-> **不再参与编译**（`kmod-rtl-ax-ap` 已从 config 移除，`50-rtl-ax-ap` 已删除）。
-> rtw89 方案尚未真机验证，若出现问题可直接回退到切换前的 commit。
 
 ---
 
@@ -123,23 +92,9 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
 |---|---|
 | 管理地址 | `192.168.1.1`（root 无密码，首登请自行设置） |
 | 主机名 | 跟随机型，如 `PT1570-R10` |
-| 时区 | `Asia/Shanghai`，NTP 用国内源（aliyun / tencent / ntsc / cn.pool） |
-| WAN | **无默认 WAN**（`pon0.1101`/PPPoE/PON FE 已全部去掉），首次开机需自行配置上网 |
 | 5G | SSID `PT1570-R10-5G`，**开放（无密码）**，htmode/信道交还驱动推导（预期 HE80 / auto） |
 | 2.4G | SSID `PT1570-R10-2.4G`，**开放（无密码）**，htmode/信道交还驱动推导（预期 HE20 / auto） |
 | 面板灯 | 跟随真实网口（EPHY0..3 → LAN4..LAN1） |
-
-所有默认值都是"仅在仍是出厂默认时才改"，用户动过的项不会被覆盖。
-**想改回加密**：LuCI → 网络 → 无线 → 修改 → 加密选 WPA2-PSK 并设密码即可，不需要重新编译。
-
-> **关于"无默认 WAN"**：本固件出厂不带任何 WAN 配置。PON 驱动（`tyfza1-pon-control`）
-> 仍在，光模块/LAN/WiFi 正常工作，但 `pon0` 的 VLAN 子接口、PPPoE 协议、PON 转发引擎
-> （`offload`）都不再自动设置。首次开机后请到 **网络 → 接口** 自行新建 WAN：
-> 设备填 `pon0.<你的VLAN>`（Point-to-Point 协议选 PPPoE 并填账号密码），PON 页按运营商
-> 填 LOID/SN。之前版本会自动写成 `pon0.1101` + PPPoE + `offload=1`，
-> 现已从两处移除：本机 `files/etc/uci-defaults/95-pt1570-wan-default`（已删除），
-> 以及上游 `target/.../uci-defaults/90-tyfza1-pon-wan`（由 `apply-board.sh` 在编译时删除，
-> 避免首次开机又冒出一个 `pon0.3961` 的默认 PPPoE WAN）。`preflight.sh` 会校验这两点。
 
 ---
 
@@ -184,45 +139,13 @@ checkout → CRLF 归一化 → 释放磁盘/装依赖 → 克隆上游(锁 comm
 > ⚠️ GitHub 单仓库缓存配额 **10 GB**（LRU 淘汰）。四层缓存全量约 7–8 GB，正常够用。
 > 如果发现 dl 缓存老是被挤掉，优先调小 `CCACHE_MAXSIZE`（workflow 顶部 env，默认 1200M）。
 
-### 5.3 ccache 为什么要连 `CONFIG_DEVEL` 一起打开（踩过的坑）
-
-上游 `config/Config-devel.in` 里 ccache 的定义是：
-
-```
-menuconfig DEVEL
-	bool "Advanced configuration options (for developers)"
-
-	config CCACHE
-		bool "Use ccache" if DEVEL      # ← 注意 "if DEVEL"
-```
-
-`if DEVEL` 限制的是 **prompt 可见性**。`DEVEL=n` 时这个符号根本不会出现在配置里，
-Kconfig 会忽略 `.config` 里手写的 `CONFIG_CCACHE=y`，`make defconfig` 直接
-把它改写成 `# CONFIG_CCACHE is not set`。
-
-2026-11-14 实测后果：`diy-part2.sh` 里那条"CCACHE 不能被 defconfig 丢弃"的断言失败，
-job 在第 15 步、**25 秒**就退出（连编译都没开始）。所以 `diy-part2.sh` 现在成对写入：
-
-```
-CONFIG_DEVEL=y                      # 让开发者选项可见，本身不改产物
-# CONFIG_AUTOREBUILD is not set     # DEVEL 会把它默认成 y，CI 里只会反复重编
-CONFIG_CCACHE=y
-```
-
-另外 ccache 目录不是 `staging_dir/ccache`：`rules.mk` 里
-`CCACHE_DIR = $(if $(CONFIG_CCACHE_DIR),…,$(TOPDIR)/.ccache)`，
-`CONFIG_CCACHE_DIR` 为空时落在**源码根的 `.ccache`**。workflow 缓存的正是这个目录
-（另外两处 `staging_dir/ccache`、`~/.ccache` 只是兜底）。
-
-### 5.4 Release 只保留最新一次编译
+### 5.3 Release 只保留最新一次编译
 
 Release 是**滚动**语义（tag 固定，如 `pt1570-r10`），但产物文件名带时间戳
 （`…-squashfs-sysupgrade-20261114-1600.itb`）。`softprops/action-gh-release` 只覆盖**同名**附件，
 所以每隔一次编译就会多留一套旧 itb —— 十几轮之后 Release 列表就没法看了。
 
 现在发布后会多跑一步「清理旧附件」，按**本次产物清单**反删其余附件，最终只留下最新一套。
-
-**顺序是「先传后删」**，不是"先删后传"：万一上传环节失败，旧产物还在，不会出现一个空 Release。
 
 三道护栏，宁可不删也不误删：
 
@@ -240,144 +163,7 @@ Release 是**滚动**语义（tag 固定，如 `pt1570-r10`），但产物文件
 
 ---
 
-## 6. 无线默认值策略：对齐原厂，协议/信道交还驱动推导（重要）
-
-`package/network/config/wifi-scripts/files/lib/wifi/mac80211.uc` 生成 `/etc/config/wireless`
-时，`htmode` 取的是**该频段支持的最高协议**：
-
-```ucode
-const htmode_order = [ "EHT", "HE", "VHT", "HT" ];
-let htmode = filter(htmode_order, (m) => band[lc(m)])[0];
-```
-
-2026-11-16 把原厂固件 rootfs 解包对比后确认：**原厂的 `mac80211.uc` 与上游逐行相同**，
-原厂也不钉 htmode / 信道，全靠 `rtl_ax_ap` 驱动宣称的能力推导。这套驱动的频段能力是：
-
-| 频段 | HT | VHT | HE | EHT | 推导终态 |
-|---|---|---|---|---|---|
-| 2.4G（8192XB） | ✅ | ❌ | ✅ | ❌ | **HE20**（width 强制 20） |
-| 5G（8852C） | ✅ | ✅ | ✅ | ❌ | **HE80**（max_width 160 封顶 80） |
-
-因此本仓库同样**不做任何钉死**：htmode、信道全部交还驱动推导（信道为 auto），
-首启脚本只兜 country=CN、启用、不隐藏——与原厂行为一致。
-
-**历史与风险提示（2026-11-14 的 HE 信标事件）**：当时真机上 2.4G 推导出 HE20，
-出现"Windows 能搜到能连、Android 永远看不到 SSID"的现象（疑似 HE 信标兼容性），
-为此曾把 2G 钉死 HT20。但该修复**从未刷机复验**，且原厂同样推导 HE20，故按用户
-决定回退为推导模式。如果刷机后手机又搜不到 2.4G：
-
-1. 先确认现象：`iw dev phy1-ap0 info` 看 `width`，`grep ieee80211ax /var/run/hostapd-phy1.conf`；
-2. 临时对策：LuCI → 网络 → 无线 → 编辑 2.4G 接口 → htmode 手动改 **HT20** 保存即可，
-   不需要重新编译；
-3. 若确认是 HE 信标问题且想长期规避，再回仓库把生成器钉回 HT20。
-
-> 顺带纠正一个常见误判：`iwinfo` 显示的 `HT Mode: HT40` **不代表真实带宽**，它读的是
-> `ht_capab` 里的 `SHORT-GI-40` 标志位。真实带宽只看 `iw dev phyX-ap0 info` 的 `width`。
-
-### 6.1 2026-11-19 无线方案全量替换（来自 `new-fit-4ge-20261119.itb`）
-
-把桌面 `new-fit-4ge-20261119.itb` 解包后，确认其无线方案与本仓库**同源**：
-
-| 项目 | ITB 实机证据 | 结论 |
-|---|---|---|
-| AP 驱动 | `/etc/modules.d/50-rtl-ax-ap` → `rtl_ax_ap`；`kmod-rtl-ax-ap.list` 含 `mac80211.ko` + `rtl_ax_ap.ko` | `rtl_ax_ap` + cfg80211/mac80211，**不是** rtw88/rtw89/mt76 |
-| 2.4G | `rtl8192xb-u1-ap.bin` / `rtl8192xb-u2-ap.bin`、`rtl8192xbe/RFE54|RFE50|PON_2G` | RTL8192XB / RTL8192XBE |
-| 5G | `rtl8852c-u1-ap.bin` / `rtl8852c-u2-ap.bin`、`rtl8852ce/RFE54/RTK66587_BPF[_YH9570]` | RTL8852C / RTL8852CE |
-| 内核 | `vermagic=6.18.55 SMP mod_unload aarch64` | 与云编译内核口径一致 |
-
-按用户选择**「固件 + 射频表 + 配置全换」+ 校准「同时覆盖」**执行：
-
-- **固件**：`files/lib/firmware/realtek/tyfza1/` 整目录由 ITB 的
-  `lib/firmware/realtek/tyfza1/` 覆盖；新增 `rtl8192xbe/RFE50/`（含 `PON_2G/`）、
-  `rtl8852ce/RFE54/RTK66587_BPF_YH9570/` 两组此前缺失的射频目录。
-  射频表从 42 张增至 **70 张**，`scripts/verify-rf-tables.py` 逐字段模拟解析
-  **70 张 / 0 失败**。
-- **校准**：5G 的 `flash-calibration.factory-fallback.bin` 用 ITB 内唯一的 built-in
-  284B 平台校准覆盖（源 `etc/tyfza1/wifi-default/rtl8852ce/flash-calibration.bin`，
-  md5 `07f1bd22ed4be057f9f007281a04aa3a`，头 `TYFC0003`）；2.4G fallback **保持原样**
-  —— ITB 里 2.4G 只有指向 `/tmp/tyfza1-factory/...` 的 symlink，没有独立 built-in 文件。
-  `flash-calibration.bin` 仍为 git mode `120000` 的符号链接，运行时由 factory 生成。
-- **配置**：移植并按 PT1570-R10 改名——
-  `etc/modules.d/50-rtl-ax-ap`（模块自动加载）、
-  `etc/hotplug.d/ieee80211/10-wifi-detect`（无线 add 后重跑 `wifi config`）、
-  `etc/uci-defaults/92-pt1570-r10-wifi-default`（LAN MAC 后四位生成
-  `PT1570-R10[-5G]-xxxx` / `psk2` / `12345678`）、
-  `etc/uci-defaults/92-pt1570-r10-wireless-country`（默认 `country=CN`）。
-
-**刻意不移植**：ITB 里编译好的 `.ko` 是 6.18.55 绑定的产物，云编译必须从源码构建；
-ITB 的 `90-tyfza1-pon-wan` / `91-tyfza1-lan1-wan*` / dawn / mesh 等脚本含默认 WAN，
-与「彻底无默认 WAN」口径冲突；`init.d/tyfza1-factory` 是 TYFZA1 的 UBI factory 机制，
-本仓库沿用 PT1570-R10 已真机验证的 RTLFACT1 机制。preflight §7f 对上述资产与
-「新增脚本零 WAN 注入」逐项设了断言。
-
-### 6.2 2026-11-21 5G 不广播根因：regulatory.db 缺签名（重要）
-
-真机现象：2.4G 正常，5G 完全没有 SSID。`dmesg`/`logread` 定位链路：
-
-```
-cfg80211: loaded regulatory.db is malformed or signature is missing/invalid
-iw reg get -> country 00 (world domain)
-iw phy0 channels -> 所有 5G 信道 NO-IR（被动/禁止发射）
-hostapd: Frequency 5745 (149) not allowed for AP mode, flags: NO-IR
-hostapd: ACS 选到 DFS 信道 52 -> DFS start_dfs_cac() failed -> AP-DISABLED
-```
-
-根因：`wireless-regdb` 包装的 `regulatory.db` **缺配套签名 `regulatory.db.p7s`**，
-内核据此判定 regdb 无效、退回 world domain，5G 信道全被标记 NO-IR，hostapd 无论
-选哪个信道都起不来（固定 149 / 降到 HE20 都无效，与固件/驱动/校准无关）。
-
-修复（已真机验证：5G 恢复广播，信道 149 / HE80）：
-
-- `files/lib/firmware/regulatory.db`（6348B，md5 `f90f67fb…`）+ 同目录
-  `regulatory.db.p7s`（1085B，md5 `37d15dd7…`）：来自 kernel.org 官方
-  `wireless-regdb-2026.09.03`，**带有效签名**。CN 规则下 5725–5850MHz
-  （信道 149–165）无 NO-IR、无 DFS。
-- `files/etc/init.d/wifi-regdom`（START=19）：开机兜底 `iw reg set CN`（幂等）。
-- preflight §7g 对两个文件的尺寸+md5、脚本内容与语法设断言；
-  `.gitattributes` 把 `.db`/`.p7s` 标为 binary 防止换行转换破坏签名。
-
-> 排障备忘：`iw reg set CN` 在 regdb 无效时**静默失败**（仍是 country 00）；
-> 必须先有有效 db+p7s，regdom 设置才生效。设备极简 busybox（无 base64/xxd/od/
-> sftp），远程写二进制可用 `awk '{printf "%c",$1}'` 从 stdin 逐字节灌入。
-
-### 6.3 2026-11-21 2.4G 手机搜不到根因：驱动灌错 RFE 前端表（重要）
-
-真机现象：所有无线终端（小米15/HyperOS2 及其他设备）搜不到 `PT1570-R10-2.4G`，
-手动添加也连不上；5G 完全正常、手机能搜邻居 2.4G、电脑紧贴路由器能扫到 2.4G
-（802.11g/信道1/信号100%）。软件配置层（HT20/CCK/SSID/信道/天线/txpower）、
-固件 bin、校准 blob、regdb 全部逐一排除。
-
-从真·原厂 NAND 备份（`E:/pt1570-r10/pt1570-r10-backup`，mtd8 rootfs）定位到根因：
-
-- 原厂无线驱动 `rtk_wifi6.ko` 内含编译期配置：
-  `CONFIG_WLAN0_RFE_TYPE_54`、`CONFIG_WLAN1_RFE_TYPE_50`。
-  即 **5G（WLAN0/8852C）= RFE54，2.4G（WLAN1/8192XB）= RFE50**。
-- 原厂 `etc/conf/rtl8192xbe/` 有 RFE50/51/53/54 四套前端表，驱动按硬件选；
-  PT1570-R10 的 2.4G 前端是 **RFE50**，配套表在 `RFE50/`（base，表头
-  `8192XBR RFE50 version=27`）+ `RFE50/PON_2G/`（PON 模式 FEM overlay）。
-- 但本工程的 `rtl_ax_ap` 驱动（refactor 逆向重写版）把两路射频表路径**硬编码成
-  RFE54**：2.4G 读 `rtl8192xbe/RFE54/` + `RFE54/RTK66287/`（ver31），
-  与真实前端 RFE50 不符 → 寄存器/FEM/功率表全套灌错 → 2.4G 发射极弱；
-  5G 恰好 RFE54 正确，所以一直正常。设备 `radio_state` 曾显示
-  `phy_inputs=RFE54-base-and-FEM`、`GAPK_measurement=skipped-by-original-XB-RFE54`。
-
-修复（2026-11-21，`board/wifi/rtl_ax_ap/`）：
-
-- `phy.c` / `limits.c` / `power-tables.c`：按芯片选择 RFE 目录——8852C(5G) 仍用
-  `RFE54/RTK66587_BPF`，8192XB(2.4G) 改用 `RFE50/PON_2G`。表文件本就在工程里
-  （ITB 移植时已带入），且与真原厂 backup md5 一致，无需新增资产。
-- `pci.c`：三处诊断字符串由写死 RFE54 改为按芯片反映实际 RFE（仅显示，不改硬件行为）。
-- 说明：驱动对 XB 的 GAPK 测量本就 skip（逆向驱动未移植该测量，与 RFE 值无关），
-  保持原样；核心修复是表路径。
-- 校验：`scripts/preflight.sh`（PREFLIGHT_OK）、`scripts/verify-rf-tables.py`
-  （70 张表 0 失败，含 RFE50/PON_2G）均通过。
-
-> 待真机验证：云编译刷机后，`cat /sys/.../0001:01:00.0/radio_state` 应显示
-> `phy_inputs=RFE50-base-and-FEM`，`radio_gapk` 显示 `RFE=50`。若 2.4G 恢复则根因坐实。
-
----
-
-## 7. 目录结构
+## 6. 目录结构
 
 ```
 .
@@ -417,123 +203,7 @@ hostapd: ACS 选到 DFS 信道 52 -> DFS start_dfs_cac() failed -> AP-DISABLED
 
 ---
 
-## 8. 刷完怎么验
-
-```sh
-dmesg | grep -E 'fit0|fitblk'     # 应见 "mapped 1 uImage.FIT filesystem sub-image as /dev/fit0"
-dmesg | grep -i rtl_ax            # 应见 native AP backend ... WCPU ready（两路各一行）
-mount | grep ' / '                # squashfs + overlay（不是 tmpfs）
-iw dev                            # phy0-ap0 / phy1-ap0 均存在
-iw dev phy1-ap0 info | head -8    # 2.4G：width 20 MHz
-iwinfo phy1-ap0 info | grep -E 'ESSID|Encryption'   # PT1570-R10-2.4G / none
-ip -br addr show br-lan           # 192.168.1.1
-```
-
-面板口顺序自查：插 LAN1 → `ip -br link` 里应是 `lan1` 起、且面板 LAN1 灯亮。
-
----
-
-## 9. 常见问题
-
-**Q：刷完固件后没有 SSID，`logread | grep rtl_ax_ap` 里 probe 失败？**
-驱动 `rtl_ax_ap` 在启动时要读 `/lib/firmware/realtek/tyfza1/<芯片>/flash-calibration.bin`
-（284 字节 TYFC0003 板级校准）。真文件是 `tyfza1-factory`（START=09）开机从 factory
-UBI 卷生成到 `/tmp`，rootfs 里放的是**符号链接**（原厂如此）。早期这个仓库经
-GitHub 网页上传（Add files via upload），**symlink 被静默丢掉**，驱动
-`request_firmware` 直接 -ENOENT → 两颗 WiFi 芯片 probe 失败 → 无线全灭。
-2026-11-18 起已恢复两条 symlink，并加了兜底：factory 卷对应区域为空时，
-`tyfza1-factory` 会改用内置的 `flash-calibration.factory-fallback.bin`
-（284B，从本机 mtd3 static_conf 的 NV_CFG 备份合成：thermal/晶振/TSSI/RX
-gaingap 为真实值，扩展增益表为 0）+ 现场 MAC 填 `wlan_address`。
-自查：`ls -la /lib/firmware/realtek/tyfza1/rtl8192xbe/` 应看到 `flash-calibration.bin -> /tmp/...`。
-
-**Q：编译刚跑 20 多秒就失败，日志里只有 "Process completed with exit code 1"？**
-`diy-part2.sh` 的每条断言都用 `::error::diy-part2: <原因>` 输出，GitHub 会把它渲染成
-run 页面顶部的注解，不点进日志也能看到；`ERR trap` 还会兜住"没预想到会失败"的命令
-（如 `make defconfig`），输出失败的命令原文。历史上最典型的一次是 §5.3 的
-`CONFIG_CCACHE` 被 Kconfig 重置——只写 `CCACHE=y` 而不开 `DEVEL`，25 秒就退出。
-
-**Q：日志末尾只有 `PREFLIGHT_OK=False fails=1`，找不到是哪条 FAIL？**
-`scripts/preflight.sh` 现在会在最后打印“失败项汇总”，并对每条失败发 `::error::preflight: <原因>`，
-GitHub 会把它渲染成 run 页面顶部注解。历史踩坑：网页上传丢了 `.gitattributes`，
-而当时那条检查是硬 FAIL —— 现在改为「有它就必须写 `eol=lf`；没有它只 WARN，
-前提是 workflow 里确实有 CRLF 归一化步骤」。
-
-**Q：网页上传后 `.gitattributes` / `.gitignore` 不见了？**
-浏览器拖文件夹上传会静默过滤点开头的文件。用 **Add file → Create new file**，
-文件名直接输入 `.gitattributes`（可以带前导点）即可。这两个文件只影响本地 git 检出，
-CI 里没有也能正常编译（workflow 会做 CRLF 归一化）。
-
-**Q：Actions 编译成功，但 Release 里没有附件？**
-`upload_release` 默认 `true`。另外历史踩坑：`github.event.inputs.*` 是**字符串**，
-`'true' == true` 在表达式里恒为 false，曾导致 Release 步骤永远被跳过。现在用
-`github.event.inputs.upload_release == 'true'` 显式比较，已修复。
-
-**Q：Artifacts 里找不到单个 itb？**
-文件名会被加上时间戳（`…-squashfs-sysupgrade-20261114-1530.itb`），所以 artifact 的路径写成
-`*squashfs-sysupgrade*.itb`；下载后仍套一层 zip，解压即裸 itb。真正的单文件在 Release 附件里。
-
-**Q：Release 里的旧固件怎么没了？**
-这是设计行为（§5.4）：每次发布成功后都会删掉不属于本次产物的旧附件，只留最新一套，
-避免带时间戳的 itb 堆积成几十个。想保留历史就取消勾选 `prune_release`；旧版本也可以从
-对应 run 的 Artifacts 拿（保留 30 天）。清理只动**附件**，不动 Release 本身和 git tag。
-
-**Q：清理会不会把刚传上去的也删了？**
-不会。清理按"本次产物清单"反删，清单是发布前从固件目录实时枚举出来的；而且清单为空、
-或与现有附件零交集时会直接跳过（见 §5.4 的护栏表）。
-
-**Q：`tssi-thermal-2g.bin` 应该放哪、多大？**
-驱动 `xb-tssi.h` 写死了路径与尺寸：`rtl8192xbe/tssi-thermal-2g.bin`，**恰好 120 字节**
-（结构 `[2][2][30]` 有符号温度偏移）；5G 是 `rtl8852ce/tssi-thermal-5g.bin`，360 字节。
-放错目录驱动读不到，大小不符会被 `size != N, ignored` 丢弃。原厂 rootfs 里的
-2.4G 表本身就是全 0（原厂对 2.4G 不做温补），所以这张表是"对齐原厂行为"，
-不是 2.4G 信号问题的修复项。preflight 第 3 节会校验路径、尺寸与串位。
-
-**Q：Wi-Fi 时不时断流 / 终端被踢下线？**
-首启脚本 `98-pt1570-r10-wifi-stability` 做两件事：
-1. 所有 VAP `skip_inactivity_poll=1` + `disassoc_low_ack=0` —— 不再主动轮询和
-   踢掉省电中的终端（最常见的"连着连着就掉"来源，终端自己会决定重连）；
-2. 所有 radio 统一 `country=CN`（与原厂 92 号脚本一致）。
-协议/信道不在本脚本处理（交还驱动推导，见 §6）。注意：uci-defaults 只在首启生效，
-刷机若"保留配置"需要手动执行或恢复出厂。5G 用 auto 信道若出现"所有终端同时掉一下
-再恢复"，是 DFS 雷达误报触发信道切换——把 5G 信道手动固定到 **149**（CN 合法、
-非 DFS）即可。若做完仍断流，抓
-`logread | grep -E 'hostapd|wifi-stability'` 和 `dmesg` 里 rtl_ax_ap 的报错再定位。
-
-**Q：系统里（web）升级没有反应，重启后固件没变？**
-旧固件的 platform.sh 用 `nand_do_upgrade` 硬编码往 UBI 卷写镜像，但运行中的
-rootfs 正挂在这个卷的 fitblk/ubiblock 设备上——卷被占用，写入静默失败，
-重启自然是旧固件（上游 8c91b228b4 "release fitblk before sysupgrade" 修复）。
-2026-11-16 起 `apply-board.sh` 会把 platform.sh 升级为 `fit_do_upgrade` 流程
-（先 `fitblk /dev/fit0` 释放块设备再写卷），并把 `fitblk` 工具复制进
-sysupgrade 的 ramfs。**验证方法**：升级完成后看 LuCI 概览「型号」，新固件显示
-`Youhua PT1570-R10 (RTL9617C, 4xGE, UBI)`；仍显示 `... FIT ABI` 就是没刷进去
-（这个标记来自朋友 2026-11-16 的实证思路，也用于区分朋友版固件）。
-
-**Q：网页升级直接报 `this image is for youhua,pt1500-h10, not youhua,pt1570-r10`？**
-镜像本身没问题，是**升级钩子被 H10 的脚本抢走了**。`/sbin/sysupgrade` 启动时会
-`source` 掉 `/lib/upgrade/*.sh` 全部脚本，其中 `pt1500-fip.sh`（H10 专用，按字母序
-排在 `platform.sh` 之后）无条件定义 `platform_check_image` / `platform_do_upgrade` /
-`platform_copy_config`，把本机型 `platform.sh` 里的版本整个覆盖掉：前者只认
-`youhua,pt1500-h10`，所以第一句就判死；后者写 `fip` 卷，而 R10 上没有这个卷。
-2026-11-16 起 `apply-board.sh` 会把这三个定义包进 `case "$(board_name)"`，仅在
-H10 机型生效。**注意**：这个 bug 在**运行中的旧固件**里也存在，所以刷入这一版之前
-若报同样错误，可先在旧固件里把 `/lib/upgrade/pt1500-fip.sh` 的函数体用同样的
-`case` 包起来，或直接用 U-Boot recovery 刷写。
-（排查命令：`sh -x /sbin/sysupgrade -T /tmp/firmware.bin` 能看到加载顺序）
-
-**Q：刷完没有无线信号？**
-按顺序查：`dmesg | grep -i -E 'rtl_ax|EINVAL'` → `ls -l /lib/firmware/realtek/tyfza1/`
-→ `ls -l /etc/init.d/tyfza1-factory`（**必须有 `x`**）→ `cat /lib/firmware/realtek/tyfza1/rtl8852ce/flash-calibration.bin | wc -c`（**必须是 284**）。
-
-**Q：电脑能看到 2.4G，手机看不到？**
-参见 §6 的 HE 信标历史事件。先确认当前 htmode：`grep -i htmode /etc/config/wireless`
-（推导模式下 2.4G 为 HE20）。若怀疑是 HE 信标兼容性，LuCI 里把 2.4G htmode 手动改
-**HT20** 观察手机能否搜到；能搜到即可确认，再决定是否回仓库长期钉回。
-
-**Q：网口顺序和面板对不上？**
-`scripts/patch-upstream.sh` 里对 R10 用 `index = 4 - port` 修正命名。如果上游改了这段
-switch，断言会在 `preflight.sh` 第 7b 节直接报错。
+## 7. 常见问题
 
 **Q：为什么第一次（或改了 diy 脚本后）还是要编一小时？**
 缓存是"内容寻址 + 配置指纹"的：改了 `diy-part1/2.sh`、`.config` 或 `scripts/*`，工具链缓存的 key
@@ -547,7 +217,7 @@ Actions 日志里 `Restore toolchain & host tools cache` 是否显示 `Cache res
 
 ---
 
-## 11. 上游与致谢
+## 8. 上游与致谢
 
 ### 上游基座（双基线：refactor 克隆 + 20b4cf4 硬件层）
 
