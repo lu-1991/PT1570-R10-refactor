@@ -342,18 +342,36 @@ jobs:
           cat "$GITHUB_WORKSPACE/configs/youhua_pt1570-r10.config" >> .config
           bash "$GITHUB_WORKSPACE/diy-part2.sh"
 
-      # rtw89 官方驱动固件校验：rtw8192xb_fw.bin(2.4G) / rtw8852c_fw.bin(5G)
-      # 由内核驱动 request_firmware 从 /lib/firmware/rtw89/ 加载，缺一个就 probe 失败。
-      - name: Verify rtw89 firmware
+      # rtw89 固件双链路校验：
+      #  A) 内核内置（CONFIG_EXTRA_FIRMWARE）：board/rtw89/firmware/ 下 3 个，含 5G
+      #     优先请求的 rtw8852c_fw-2.bin。built-in 驱动早期 probe 不依赖 rootfs，
+      #     这是"能进系统但无 WiFi"的根因修复。
+      #  B) rootfs 兜底：files/lib/firmware/rtw89/ 下 2 个，运行时固件重载可用。
+      - name: Verify rtw89 firmware (builtin + rootfs)
         run: |
           set -e
+          B="$GITHUB_WORKSPACE/board/rtw89/firmware"
+          for fw in rtw8852c_fw-2.bin rtw8852c_fw.bin rtw8192xb_fw.bin; do
+            [ -s "$B/$fw" ] || { echo "::error::缺内置固件 $fw"; exit 1; }
+            sz=$(stat -c %s "$B/$fw")
+            [ "$sz" -gt 100000 ] || { echo "::error::内置固件 $fw 大小异常 $sz"; exit 1; }
+          done
+          cmp -s "$B/rtw8852c_fw-2.bin" "$B/rtw8852c_fw.bin" \
+            || { echo "::error::rtw8852c_fw-2.bin 与 5G 固件内容不一致"; exit 1; }
           T="$GITHUB_WORKSPACE/files/lib/firmware/rtw89"
           for fw in rtw8192xb_fw.bin rtw8852c_fw.bin; do
             [ -s "$T/$fw" ] || { echo "::error::缺 rtw89 固件 $fw"; exit 1; }
             sz=$(stat -c %s "$T/$fw")
             [ "$sz" -gt 100000 ] || { echo "::error::$fw 大小异常 $sz"; exit 1; }
           done
-          echo "RTW89_FIRMWARE_OK=True (2/2)"
+          # 确认内核 config 真的把固件编进去了（overlay 已跑过）
+          CFG="/workdir/openwrt/target/linux/rtl9617c/config-6.18"
+          grep -q 'CONFIG_EXTRA_FIRMWARE=".*rtw8852c_fw-2.bin' "$CFG" \
+            || { echo "::error::config-6.18 缺 EXTRA_FIRMWARE -2.bin"; exit 1; }
+          fwdir="/workdir/openwrt/target/linux/rtl9617c/files-6.18/firmware/rtw89"
+          [ -s "$fwdir/rtw8852c_fw-2.bin" ] \
+            || { echo "::error::内核 files-6.18 缺 -2.bin（EXTRA_FIRMWARE 会编译失败）"; exit 1; }
+          echo "RTW89_FIRMWARE_OK=True (builtin 3 + rootfs 2, -2.bin alias OK)"
 
       - name: Run static preflight
         working-directory: ${{ github.workspace }}

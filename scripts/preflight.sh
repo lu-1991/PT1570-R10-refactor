@@ -30,6 +30,9 @@ for f in diy-part1.sh diy-part2.sh \
          files/etc/uci-defaults/99-pt1570-fit \
          board/rtw89/driver/rtw89_factory.c \
          board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
+         board/rtw89/firmware/rtw8192xb_fw.bin \
+         board/rtw89/firmware/rtw8852c_fw.bin \
+         board/rtw89/firmware/rtw8852c_fw-2.bin \
          files/lib/firmware/rtw89/rtw8192xb_fw.bin \
          files/lib/firmware/rtw89/rtw8852c_fw.bin \
          files/etc/hotplug.d/ieee80211/10-wifi-detect \
@@ -352,6 +355,15 @@ grep -q 'PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x0192)' "$DRV/rtw8192xbe.c" \
   && ok "8192XBE (0x0192) 2.4G 设备 ID 在位" || bad "8192XBE 设备 ID 缺失"
 grep -q 'RTL8192XB' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
   && ok "740 补丁含 RTL8192XB 支持" || bad "740 补丁缺 RTL8192XB"
+# 固件编内核（built-in rtw89 早期 probe 根因修复）：overlay 必须写 EXTRA_FIRMWARE，
+# 且必须包含 5G 优先请求的 -2.bin 别名，否则真机跑起来无 WLAN。
+grep -q 'CONFIG_EXTRA_FIRMWARE=".*rtw8852c_fw-2.bin' scripts/overlay-rtw89.sh \
+  && ok "overlay 将 5G -2.bin 编进内核(EXTRA_FIRMWARE)" \
+  || bad "overlay 缺 CONFIG_EXTRA_FIRMWARE 的 rtw8852c_fw-2.bin（早期 probe 会失败）"
+grep -q 'CONFIG_EXTRA_FIRMWARE_DIR="firmware"' scripts/overlay-rtw89.sh \
+  && ok "overlay 设 EXTRA_FIRMWARE_DIR=firmware" || bad "overlay 缺 EXTRA_FIRMWARE_DIR"
+cmp -s board/rtw89/firmware/rtw8852c_fw-2.bin board/rtw89/firmware/rtw8852c_fw.bin \
+  && ok "-2.bin 别名与 5G 固件内容一致" || bad "-2.bin 与 rtw8852c_fw.bin 不一致"
 # 只查生效行（忽略注释）：config 里允许有"已移除"的说明文字，
 # 但任何未注释的 kmod-rtl-ax-ap=y 或 overlay 调用都必须消失。
 ! grep -qE '^[[:space:]]*CONFIG_PACKAGE_kmod-rtl-ax-ap=' configs/*.config \

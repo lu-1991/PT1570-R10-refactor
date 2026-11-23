@@ -19,8 +19,11 @@
 #   3. 内核 config       -> target/linux/rtl9617c/config-6.18
 #      （开 rtw89 + NVMEM + MTD_UBI_NVMEM，关 rtl_ax_ap）
 #   4. DTS nvmem 绑定    -> R10 DTS 的 &pcie0/&pcie1 wifi 节点
-#      固件 rtw8192xb_fw.bin / rtw8852c_fw.bin 由 files/ 覆盖链落地
-#      （files/lib/firmware/rtw89/，在 workflow 的 rootfs 步骤 cp）。
+#   5. 固件             -> 双链路：
+#      a) 编进内核（CONFIG_EXTRA_FIRMWARE）：board/rtw89/firmware/ 下 3 个 ->
+#         files-6.18/firmware/rtw89/，含 5G 优先请求的 rtw8852c_fw-2.bin。
+#         built-in 驱动早期 probe 直接命中，不依赖 rootfs（根因修复）。
+#      b) rootfs 兜底（files/lib/firmware/rtw89/ 下 2 个，workflow cp）。
 #
 # 幂等：重复执行安全。任何一步不满足预期都 fail，绝不产出半套驱动。
 # ================================================================
@@ -33,12 +36,16 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 
 DRV_SRC="$ASSETS/board/rtw89/driver"
 PATCH_SRC="$ASSETS/board/rtw89/patches/740-wifi-rtw89-8192xb.patch"
+FW_SRC="$ASSETS/board/rtw89/firmware"
 DRV_DST="$WRT/target/linux/rtl9617c/files-6.18/drivers/net/wireless/realtek/rtw89"
+# 内核 EXTRA_FIRMWARE 从 files-6.18/firmware/ 读取（该目录在内核 prepare 阶段
+# 被 OpenWrt rsync 进内核源码树，相对 CONFIG_EXTRA_FIRMWARE_DIR=firmware）。
+FW_DST="$WRT/target/linux/rtl9617c/files-6.18/firmware/rtw89"
 PATCH_DST="$WRT/target/linux/rtl9617c/patches-6.18/740-wifi-rtw89-8192xb.patch"
 CFG="$WRT/target/linux/rtl9617c/config-6.18"
 DTS="$WRT/target/linux/rtl9617c/dts/rtl9617c-pt1570-r10.dts"
 
-for f in "$DRV_SRC" "$PATCH_SRC" "$CFG" "$DTS"; do
+for f in "$DRV_SRC" "$PATCH_SRC" "$FW_SRC" "$CFG" "$DTS"; do
   [ -e "$f" ] || fail "缺少 $f"
 done
 
@@ -60,6 +67,24 @@ done
 [ "$n" -eq 6 ] || fail "驱动源文件数 $n != 6"
 md5sum "$DRV_DST"/* | sha256sum | cut -d' ' -f1 > /tmp/rtw89-driver.sha256
 echo "  驱动源码 $n 个文件已落地"
+
+# ---- 1b. 固件编进内核（CONFIG_EXTRA_FIRMWARE 的数据源）----
+# 根因：rtw89 是 built-in(=y)，PCI probe 发生在内核早期（4.3s，root=/dev/fit0
+# 尚未挂载），此时 /lib/firmware/rtw89/ 还不存在。5G 驱动 fw_format_max=2，
+# 优先请求 rtw8852c_fw-2.bin，找不到 -> sysfs fallback -> probe 失败 -> 无 WLAN。
+# 解法：把固件放进 files-6.18/firmware/rtw89/（OpenWrt 内核 prepare 阶段会把它
+# rsync 进内核源码树），配合 CONFIG_EXTRA_FIRMWARE 编进内核镜像。built-in 固件
+# 查询优先于文件系统，early probe 直接命中，不依赖 rootfs 挂载时序。
+# 注意：files/lib/firmware/rtw89/ 那份仍保留（rootfs 里），供运行时 modprobe 兜底。
+mkdir -p "$FW_DST"
+fw_n=0
+for fw in rtw8852c_fw-2.bin rtw8852c_fw.bin rtw8192xb_fw.bin; do
+  [ -f "$FW_SRC/$fw" ] || fail "缺少固件源 $FW_SRC/$fw"
+  cp -f "$FW_SRC/$fw" "$FW_DST/$fw"
+  fw_n=$((fw_n + 1))
+done
+[ "$fw_n" -eq 3 ] || fail "固件数 $fw_n != 3"
+echo "  固件 $fw_n 个已落地到 files-6.18/firmware/rtw89（含 5G -2.bin 别名）"
 
 # ---- 2. 内核补丁 ----
 cp -f "$PATCH_SRC" "$PATCH_DST"
@@ -168,6 +193,8 @@ write_syms = (
     'CONFIG_RTW89_8922AE', 'CONFIG_RTW89_DEBUGMSG',
     'CONFIG_NVMEM', 'CONFIG_NVMEM_LAYOUTS', 'CONFIG_NVMEM_SYSFS',
     'CONFIG_NVMEM_REALTEK_TAURUS_OTP', 'CONFIG_MTD_UBI_NVMEM',
+    # 固件编进内核：built-in rtw89 早期 probe 不依赖 rootfs 挂载。
+    'CONFIG_EXTRA_FIRMWARE', 'CONFIG_EXTRA_FIRMWARE_DIR',
     # 旧的逆向驱动符号：先删旧值（=m），下面 new 块显式写 not set。
     # 只删不写会让 syncconfig 视其为 NEW 并按 Kconfig 默认重新打开（=m），
     # 内核随即编译 rtl_ax_ap 并撞上已删除的 pe-tx-code.h（CI 已踩）。
@@ -228,6 +255,12 @@ new = [
     'CONFIG_NVMEM_SYSFS=y',
     'CONFIG_NVMEM_REALTEK_TAURUS_OTP=y',
     'CONFIG_MTD_UBI_NVMEM=y',
+    # ===== 固件编进内核：解决 built-in rtw89 早期 probe 读不到 rootfs 固件 =====
+    # 5G 驱动 fw_format_max=2，探测顺序 -2.bin -> -1.bin -> .bin；三个都列全，
+    # 确保 request_firmware 无论从哪个 format 起步都能命中内置固件。
+    # DIR=firmware 相对内核源码根；固件由上面 1b 步放到 files-6.18/firmware/rtw89。
+    'CONFIG_EXTRA_FIRMWARE="rtw89/rtw8852c_fw-2.bin rtw89/rtw8852c_fw.bin rtw89/rtw8192xb_fw.bin"',
+    'CONFIG_EXTRA_FIRMWARE_DIR="firmware"',
 ]
 p.write_text('\n'.join(lines + new) + '\n', encoding='utf-8', newline='\n')
 PY
@@ -249,7 +282,12 @@ done
 grep -qx '# CONFIG_RTL_AX_AP is not set' "$CFG" \
   || fail "config 未显式关闭 CONFIG_RTL_AX_AP（只删行会让 syncconfig 按默认=m 重开，编译撞 pe-tx-code.h）"
 ! grep -q '^CONFIG_RTL_AX_AP=' "$CFG" || fail "config 仍有 CONFIG_RTL_AX_AP=m/y（两套驱动会抢 PCI 设备）"
-echo "  config 已切 rtw89（NVMEM on / rtl_ax_ap off）"
+# EXTRA_FIRMWARE 必须含 5G 的 -2.bin 别名（驱动 fw_format_max=2 优先请求）
+grep -q '^CONFIG_EXTRA_FIRMWARE=".*rtw89/rtw8852c_fw-2.bin.*"$' "$CFG" \
+  || fail "config 缺 CONFIG_EXTRA_FIRMWARE 的 rtw8852c_fw-2.bin（5G 早期 probe 会失败）"
+grep -q '^CONFIG_EXTRA_FIRMWARE_DIR="firmware"$' "$CFG" \
+  || fail "config 缺 CONFIG_EXTRA_FIRMWARE_DIR=firmware（内置固件找不到路径）"
+echo "  config 已切 rtw89（NVMEM on / rtl_ax_ap off / 固件编内核 EXTRA_FIRMWARE）"
 
 # ---- 4. DTS：把 factory 校准 cell 接到 PCIe wifi 节点 ----
 # 硬件层 dtsi 已定义 wifi_cal_radio0(@2000,5G)/radio1(@3000,2.4G)，但没接到
@@ -295,13 +333,21 @@ grep -q 'nvmem-cells = <&wifi_cal_radio0>' "$DTS" || fail "5G 校准 cell 未绑
 grep -q 'nvmem-cells = <&wifi_cal_radio1>' "$DTS" || fail "2.4G 校准 cell 未绑定"
 echo "  DTS: pcie0(5G)/pcie1(2.4G) 已绑定 factory 校准 cell"
 
-# ---- 5. 固件落地校验（files/ 链路） ----
-# rtw89 从 /lib/firmware/rtw89/ 请求固件；files/ 会被 workflow cp 进 rootfs。
+# ---- 5. 固件落地校验（两条链路） ----
+# 链路 A（内核 built-in）：files-6.18/firmware/rtw89/ 下 3 个文件（含 5G -2.bin 别名），
+#   由 CONFIG_EXTRA_FIRMWARE 编进内核，early probe 可读（上面 1b 已落地）。
+# 链路 B（rootfs 兜底）：files/lib/firmware/rtw89/ 下 2 个文件，workflow cp 进 rootfs，
+#   供运行时固件重载使用。
+for fw in rtw8852c_fw-2.bin rtw8852c_fw.bin rtw8192xb_fw.bin; do
+  f="$FW_DST/$fw"
+  [ -f "$f" ] || fail "缺内置固件 $f"
+  [ "$(stat -c %s "$f")" -gt 100000 ] || fail "内置固件 $fw 大小异常"
+done
 for fw in rtw8192xb_fw.bin rtw8852c_fw.bin; do
   f="$ASSETS/files/lib/firmware/rtw89/$fw"
   [ -f "$f" ] || fail "缺固件 $f"
   [ "$(stat -c %s "$f")" -gt 100000 ] || fail "固件 $fw 大小异常"
 done
-echo "  rtw89 固件 2/2 就位"
+echo "  rtw89 固件就位（内核内置 3 + rootfs 2）"
 
-echo "RTW89_OVERLAY_OK=True (driver 6 + patch 1 + config + dts + fw 2)"
+echo "RTW89_OVERLAY_OK=True (driver 6 + patch 1 + config + dts + fw builtin3/rootfs2)"
