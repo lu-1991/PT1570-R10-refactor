@@ -99,7 +99,9 @@ write_syms = (
     'CONFIG_RTW89_8922AE', 'CONFIG_RTW89_DEBUGMSG',
     'CONFIG_NVMEM', 'CONFIG_NVMEM_LAYOUTS', 'CONFIG_NVMEM_SYSFS',
     'CONFIG_NVMEM_REALTEK_TAURUS_OTP', 'CONFIG_MTD_UBI_NVMEM',
-    # 旧的逆向驱动符号，新块不再写，直接删除
+    # 旧的逆向驱动符号：先删旧值（=m），下面 new 块显式写 not set。
+    # 只删不写会让 syncconfig 视其为 NEW 并按 Kconfig 默认重新打开（=m），
+    # 内核随即编译 rtl_ax_ap 并撞上已删除的 pe-tx-code.h（CI 已踩）。
     'CONFIG_RTL_AX_AP',
 )
 
@@ -148,6 +150,9 @@ new = [
     '# CONFIG_RTW89_8852BTE is not set',
     '# CONFIG_RTW89_8922AE is not set',
     '# CONFIG_RTW89_DEBUGMSG is not set',
+    # 显式关闭旧逆向驱动：否则 syncconfig 按 Kconfig 默认(=m)重新启用，
+    # 内核编译 rtl_ax_ap 会因缺 pe-tx-code.h 而 Stop（真机 CI 已踩）。
+    '# CONFIG_RTL_AX_AP is not set',
     '# ===== nvmem: factory calibration cell for rtw89 =====',
     'CONFIG_NVMEM=y',
     'CONFIG_NVMEM_LAYOUTS=y',
@@ -172,7 +177,9 @@ for sym in CONFIG_RTW89=y CONFIG_RTW89_CORE=y CONFIG_RTW89_PCI=y \
            CONFIG_NVMEM_REALTEK_TAURUS_OTP=y CONFIG_MTD_UBI_NVMEM=y; do
   grep -qx "$sym" "$CFG" || fail "config 缺 $sym（缺 not-set 会让 syncconfig 遇 NEW 报错）"
 done
-! grep -q '^CONFIG_RTL_AX_AP=' "$CFG" || fail "config 仍有 CONFIG_RTL_AX_AP（两套驱动会抢 PCI 设备）"
+grep -qx '# CONFIG_RTL_AX_AP is not set' "$CFG" \
+  || fail "config 未显式关闭 CONFIG_RTL_AX_AP（只删行会让 syncconfig 按默认=m 重开，编译撞 pe-tx-code.h）"
+! grep -q '^CONFIG_RTL_AX_AP=' "$CFG" || fail "config 仍有 CONFIG_RTL_AX_AP=m/y（两套驱动会抢 PCI 设备）"
 echo "  config 已切 rtw89（NVMEM on / rtl_ax_ap off）"
 
 # ---- 4. DTS：把 factory 校准 cell 接到 PCIe wifi 节点 ----
