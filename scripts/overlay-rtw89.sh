@@ -91,6 +91,12 @@ write_syms = (
     'CONFIG_RTW89', 'CONFIG_RTW89_CORE', 'CONFIG_RTW89_PCI',
     'CONFIG_RTW89_8192XB', 'CONFIG_RTW89_8192XBE',
     'CONFIG_RTW89_8852C', 'CONFIG_RTW89_8852CE',
+    # 740 补丁/内核 Kconfig 里 RTW89 菜单下其余芯片符号：必须全部显式设置，
+    # 否则 syncconfig 遇到 (NEW) 符号在非交互编译下报 Error 1（真机 CI 已踩）。
+    'CONFIG_RTW89_8851BE', 'CONFIG_RTW89_8851BU',
+    'CONFIG_RTW89_8852AE', 'CONFIG_RTW89_8852BE',
+    'CONFIG_RTW89_8852BU', 'CONFIG_RTW89_8852BTE',
+    'CONFIG_RTW89_8922AE', 'CONFIG_RTW89_DEBUGMSG',
     'CONFIG_NVMEM', 'CONFIG_NVMEM_LAYOUTS', 'CONFIG_NVMEM_SYSFS',
     'CONFIG_NVMEM_REALTEK_TAURUS_OTP', 'CONFIG_MTD_UBI_NVMEM',
     # 旧的逆向驱动符号，新块不再写，直接删除
@@ -133,6 +139,15 @@ new = [
     'CONFIG_RTW89_8192XBE=y',
     'CONFIG_RTW89_8852C=y',
     'CONFIG_RTW89_8852CE=y',
+    # 必须显式 not set：否则 syncconfig 视其为 (NEW)，非交互编译直接 Error 1。
+    '# CONFIG_RTW89_8851BE is not set',
+    '# CONFIG_RTW89_8851BU is not set',
+    '# CONFIG_RTW89_8852AE is not set',
+    '# CONFIG_RTW89_8852BE is not set',
+    '# CONFIG_RTW89_8852BU is not set',
+    '# CONFIG_RTW89_8852BTE is not set',
+    '# CONFIG_RTW89_8922AE is not set',
+    '# CONFIG_RTW89_DEBUGMSG is not set',
     '# ===== nvmem: factory calibration cell for rtw89 =====',
     'CONFIG_NVMEM=y',
     'CONFIG_NVMEM_LAYOUTS=y',
@@ -142,9 +157,20 @@ new = [
 ]
 p.write_text('\n'.join(lines + new) + '\n', encoding='utf-8', newline='\n')
 PY
-for sym in CONFIG_RTW89=y CONFIG_RTW89_8192XBE=y CONFIG_RTW89_8852CE=y \
-           CONFIG_NVMEM=y CONFIG_MTD_UBI_NVMEM=y; do
-  grep -qx "$sym" "$CFG" || fail "config 缺 $sym"
+for sym in CONFIG_RTW89=y CONFIG_RTW89_CORE=y CONFIG_RTW89_PCI=y \
+           CONFIG_RTW89_8192XB=y CONFIG_RTW89_8192XBE=y \
+           CONFIG_RTW89_8852C=y CONFIG_RTW89_8852CE=y \
+           '# CONFIG_RTW89_8851BE is not set' \
+           '# CONFIG_RTW89_8851BU is not set' \
+           '# CONFIG_RTW89_8852AE is not set' \
+           '# CONFIG_RTW89_8852BE is not set' \
+           '# CONFIG_RTW89_8852BU is not set' \
+           '# CONFIG_RTW89_8852BTE is not set' \
+           '# CONFIG_RTW89_8922AE is not set' \
+           '# CONFIG_RTW89_DEBUGMSG is not set' \
+           CONFIG_NVMEM=y CONFIG_NVMEM_LAYOUTS=y CONFIG_NVMEM_SYSFS=y \
+           CONFIG_NVMEM_REALTEK_TAURUS_OTP=y CONFIG_MTD_UBI_NVMEM=y; do
+  grep -qx "$sym" "$CFG" || fail "config 缺 $sym（缺 not-set 会让 syncconfig 遇 NEW 报错）"
 done
 ! grep -q '^CONFIG_RTL_AX_AP=' "$CFG" || fail "config 仍有 CONFIG_RTL_AX_AP（两套驱动会抢 PCI 设备）"
 echo "  config 已切 rtw89（NVMEM on / rtl_ax_ap off）"
