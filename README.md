@@ -134,9 +134,12 @@ checkout → CRLF 归一化 → 释放磁盘/装依赖 → 克隆上游(锁 comm
   安装；`diy-part1.sh` 调 `scripts/overlay-theme.sh` 把其 `PKG_VERSION` 的
   日期 `-` 改成 `.` 以通过新版 apk 校验，不再另外 git 拉库）。
   默认主题由包自带 `30_luci-theme-design` 设定。
-  厂商的两处 argon 设置都已删除：workflow 不再 checkout `luci-theme-argon` 包，
-  PON 包里的 `95-tyfza1-argon` / `97-tyfza1-argon-default` 由 overlay 脚本删除
-  （这两个脚本序号靠后，会抢走 design 的默认主题）。
+  厂商的 argon 残留已全部清除：① workflow 不再 checkout `luci-theme-argon` 包；
+  ② PON 包里的 `95-tyfza1-argon` / `97-tyfza1-argon-default` 由 overlay 脚本删除
+  （这两个脚本序号靠后，会抢走 design 的默认主题）；③ PON 应用 Makefile 的
+  `LUCI_DEPENDS` 写死了 `+luci-theme-argon +luci-i18n-argon-config-zh-cn`，
+  也由 `overlay-theme.sh` 摘除 —— 否则 argon 包删掉后 apk 在 `package/install`
+  阶段报 `no such package ... required by luci-app-tyfza1-pon` 而编译失败。
   未启用 tailscale / samba / vsftpd / upnp / wol —— 这些是定制项，
   需要时在 `configs/youhua_pt1570-r10.config` 里加 `CONFIG_PACKAGE_*` 即可
   （`diy-part2` 第 5/6 节会重新断言防丢包）。主题一律走包构建，不以静态文件注入 `files/`。

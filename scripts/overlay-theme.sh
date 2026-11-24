@@ -63,6 +63,36 @@ if grep -rqs -e '/luci-static/argon' -e 'luci\.themes\.Argon' \
 fi
 echo "  OK   厂商 argon 默认主题设置已清除（删除 $n_rm 个脚本）"
 
+# ---- 2b. 去掉 PON 应用 Makefile 里的 argon 依赖 ----
+# 上游 package/luci-app-tyfza1-pon/Makefile 的 LUCI_DEPENDS 写死了：
+#   +luci-theme-argon +luci-i18n-argon-config-zh-cn
+# 本仓库已删 argon 包本体，apk 在 package/install 阶段解析依赖会报：
+#   luci-i18n-argon-config-zh-cn (no such package) / luci-theme-argon (no such package)
+#   required by: luci-app-tyfza1-pon-0.8.2_beta[...]
+# 这里把这两项从依赖串里摘掉（其余依赖原样保留），否则编译必挂在 install 阶段。
+PON_MK="$WRT/package/luci-app-tyfza1-pon/Makefile"
+test -f "$PON_MK" \
+  || { echo "ERROR: 缺 $PON_MK（workflow 未 checkout 硬件层 PON 包？）" >&2; exit 1; }
+if grep -qE '\+luci-theme-argon|\+luci-i18n-argon-config-zh-cn' "$PON_MK"; then
+  sed -i -E \
+    -e 's/[[:space:]]*\+luci-theme-argon//g' \
+    -e 's/[[:space:]]*\+luci-i18n-argon-config-zh-cn//g' \
+    "$PON_MK"
+  echo "  OK   PON Makefile 已去掉 argon 依赖：$(grep -E '^LUCI_DEPENDS:=' "$PON_MK" | head -1)"
+fi
+# 断言：PON 应用依赖里已无 argon（这是本次 apk install 失败的确切来源）
+if grep -qE '\+luci-theme-argon|\+luci-i18n-argon-config-zh-cn' "$PON_MK"; then
+  echo "ERROR: $PON_MK 仍依赖已删除的 argon 包，apk install 必失败" >&2
+  exit 1
+fi
+# 全树只做提示（不 fail）：feed 里可能有未被选中的 argon 相关包，属正常残留
+stale=$(grep -rlsE '(^|[[:space:]])[+?]?(luci-theme-argon|luci-i18n-argon-config-zh-cn)([[:space:]]|$)' \
+          --include='Makefile' "$WRT/package" 2>/dev/null | grep -vF "$PON_MK" | head -5 || true)
+if [ -n "$stale" ]; then
+  echo "  note 其余 Makefile 仍提到 argon（未被选中则无碍）：$(echo "$stale" | tr '\n' ' ')"
+fi
+echo "  OK   PON 应用 argon 依赖已清除"
+
 # ---- 3. 用 kenzok8 feed 的 design 包 ----
 # 防止 package/ 顶层残留同名包（旧版拉库遗留）顶掉 feed 那份
 rm -rf "$WRT/package/luci-theme-design" 2>/dev/null || true

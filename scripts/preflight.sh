@@ -172,6 +172,12 @@ for s in 95-tyfza1-argon 97-tyfza1-argon-default; do
   grep -q "$s" scripts/overlay-theme.sh \
     && ok "overlay-theme.sh 删除厂商 $s" || bad "overlay-theme.sh 未删除 $s"
 done
+# apk install 阶段会因 PON 应用写死 argon 依赖而失败（no such package），
+# overlay-theme.sh 必须改写 PON Makefile 的 LUCI_DEPENDS，把 argon 两项摘掉。
+grep -q 'luci-app-tyfza1-pon/Makefile' scripts/overlay-theme.sh \
+  && grep -q '\+luci-i18n-argon-config-zh-cn' scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 清理 PON 应用 argon 依赖（apk install 防回归）" \
+  || bad "overlay-theme.sh 未清理 PON 应用 argon 依赖（apk install 会报 no such package）"
 grep -q '/luci-static/design' scripts/overlay-theme.sh \
   && ok "overlay-theme.sh 断言 design 默认主题脚本" \
   || bad "overlay-theme.sh 缺 design 默认主题断言"
