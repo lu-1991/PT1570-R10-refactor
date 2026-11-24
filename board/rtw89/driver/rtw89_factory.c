@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 
 #include <linux/nvmem-consumer.h>
-#include <linux/delay.h>
 
 #include "core.h"
 #include "debug.h"
-#include "phy.h"
 #include "rtw89_factory.h"
 
 #define RTW89_FACTORY_CELL_NAME		"wifi-calibration"
@@ -189,120 +187,4 @@ void rtw89_factory_fill_tssi(struct rtw89_dev *rtwdev,
 		memcpy(tssi->tssi_mcs[i] + RTW89_FACTORY_TSSI_MCS_2G_NUM,
 		       cal->tssi_mcs_5g[i], RTW89_FACTORY_TSSI_MCS_5G_NUM);
 	}
-}
-
-/* ============================================================
- * PT1570-R10: board-specific early RF/NCTL init.
- *
- * Ported from the vendor AP driver's rf_nctl_start(): the vendor brings
- * up the RF front-end NCTL block right after firmware download and BEFORE
- * the first H2C/C2H handshake.  Upstream rtw89 only runs this much later
- * in core_start(); on this board that is too late: the first H2C
- * (GET_FEATURE in setup_phycap) times out (c2h reg timeout) and chip_info
- * setup fails with -110.
- *
- * rtw89_phy_init_rf_nctl() / rtw89_phy_init_reg() /
- * rtw89_phy_config_bb_reg() are all static in phy.c, so this file cannot
- * call them directly.  Re-implement the same logic here using only
- * public interfaces from core.h / phy.h:
- *   - rtw89_phy_preinit_rf_nctl()  (inline in phy.h)
- *   - rtw89_phy_write32()          (inline in phy.h, adds cr_base)
- *   - rtw89_rfk_parser()           (exported in phy.h)
- *   - chip->nctl_table / ->nctl_post_table (in core.h)
- * The register-write and delay-opcode handling mirrors the upstream
- * rtw89_phy_config_bb_reg() exactly; the condition-branch handling mirrors
- * rtw89_phy_init_reg().  Rewriting the table is idempotent, so keeping the
- * normal-path call in rtw89_phy_dm_init() as well is safe.
- * ============================================================ */
-
-/* Mirrors rtw89_phy_config_bb_reg() delay opcodes + register write. */
-static void rtw89_factory_nctl_write(struct rtw89_dev *rtwdev,
-				     const struct rtw89_reg2_def *reg)
-{
-	if (reg->addr == 0xfe) {
-		mdelay(50);
-	} else if (reg->addr == 0xfd) {
-		mdelay(5);
-	} else if (reg->addr == 0xfc) {
-		mdelay(1);
-	} else if (reg->addr == 0xfb) {
-		udelay(50);
-	} else if (reg->addr == 0xfa) {
-		udelay(5);
-	} else if (reg->addr == 0xf9) {
-		udelay(1);
-	} else if (reg->data != BYPASS_CR_DATA) {
-		/* early init runs with extra_data=NULL (phy0 only), so no
-		 * phy0->phy1 offset is applied here. */
-		rtw89_phy_write32(rtwdev, reg->addr, reg->data);
-	}
-}
-
-/* Mirrors rtw89_phy_init_reg() condition-branch handling. */
-static void rtw89_factory_nctl_table(struct rtw89_dev *rtwdev,
-				     const struct rtw89_phy_table *table)
-{
-	const struct rtw89_reg2_def *reg;
-	u32 i, target = 0, cfg_target;
-	u8 cond;
-	bool is_matched = true, target_found = false;
-
-	if (!table || !table->regs)
-		return;
-
-	cfg_target = get_phy_target(table->regs[0].addr);
-	for (i = 0; i < table->n_regs; i++) {
-		reg = &table->regs[i];
-		cond = get_phy_cond(reg->addr);
-		switch (cond) {
-		case PHY_COND_BRANCH_IF:
-		case PHY_COND_BRANCH_ELIF:
-			target = get_phy_target(reg->addr);
-			break;
-		case PHY_COND_BRANCH_ELSE:
-			is_matched = false;
-			if (!target_found)
-				return;
-			break;
-		case PHY_COND_BRANCH_END:
-			is_matched = true;
-			target_found = false;
-			break;
-		case PHY_COND_CHECK:
-			if (target_found) {
-				is_matched = false;
-				break;
-			}
-			if (target == cfg_target) {
-				is_matched = true;
-				target_found = true;
-			} else {
-				is_matched = false;
-				target_found = false;
-			}
-			break;
-		default:
-			if (is_matched)
-				rtw89_factory_nctl_write(rtwdev, reg);
-			break;
-		}
-	}
-}
-
-void rtw89_phy_init_rf_nctl_early(struct rtw89_dev *rtwdev)
-{
-	const struct rtw89_chip_info *chip = rtwdev->chip;
-
-	if (!chip->nctl_table)
-		return;
-
-	/* Exact vendor config_nctl preamble: clock/reset for IQK/DPK and RF
-	 * paths, then trigger the NCTL block (0x8000=8) and poll 0x8080==4. */
-	rtw89_phy_preinit_rf_nctl(rtwdev);
-
-	/* Write the full NCTL register table (with delay opcodes). */
-	rtw89_factory_nctl_table(rtwdev, chip->nctl_table);
-
-	if (chip->nctl_post_table)
-		rtw89_rfk_parser(rtwdev, chip->nctl_post_table);
 }

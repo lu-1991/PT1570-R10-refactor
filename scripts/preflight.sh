@@ -159,15 +159,23 @@ done
     ! -path '*/etc/uci-defaults/*' -print -quit 2>/dev/null | grep -q . \
   && ok "files/ 无静态主题残留" || bad "files/ 残留主题注入文件（应删除）"
 
-# 主题链路（diy-part1 -> overlay-theme.sh）：用 kenzok8 feed 的 design 包
+# 主题链路（diy-part1 -> overlay-theme.sh）：拉库 ucode 版 design
+# 老式 Lua 模板（header.htm + disp.node）在 ucode LuCI 下报 __entries nil → 500，
+# 必须是带 ucode .ut 模板的 fork（felixmm0606/luci-theme-design@ucode）。
 grep -q 'scripts/overlay-theme.sh' diy-part1.sh \
   && ok "diy-part1 接入 overlay-theme.sh" || bad "diy-part1 未调用 overlay-theme.sh"
-grep -q 'kenzok8/luci-theme-design' scripts/overlay-theme.sh \
-  && ok "overlay-theme.sh 使用 kenzok8 feed 的 design 包" \
-  || bad "overlay-theme.sh 未使用 kenzok8 feed 的 design 包"
-grep -q 'git clone\|git -C.*fetch' scripts/overlay-theme.sh \
-  && bad "overlay-theme.sh 仍有额外拉库逻辑（应直接用 feed 包）" \
-  || ok "overlay-theme.sh 无额外拉库（直接用 feed 包）"
+grep -q 'felixmm0606/luci-theme-design' scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 拉库 ucode 版 design（felixmm0606）" \
+  || bad "overlay-theme.sh 未用 ucode 版 design（老 Lua 模板会 500）"
+grep -q 'git clone' scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 有 design 拉库逻辑" \
+  || bad "overlay-theme.sh 缺 design 拉库逻辑"
+grep -q 'ucode/template/themes/design/header.ut' scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 断言 ucode header.ut（防退回老 Lua 模板）" \
+  || bad "overlay-theme.sh 未断言 ucode .ut 模板（会踩 __entries nil）"
+! grep -q 'DST=.*kenzok8/luci-theme-design' scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 不以 kenzok8 feed 作为 design 来源" \
+  || bad "overlay-theme.sh 仍从 kenzok8 feed 取 design（老 Lua 模板会 500）"
 for s in 95-tyfza1-argon 97-tyfza1-argon-default; do
   grep -q "$s" scripts/overlay-theme.sh \
     && ok "overlay-theme.sh 删除厂商 $s" || bad "overlay-theme.sh 未删除 $s"
@@ -396,21 +404,30 @@ grep -q 'PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x0192)' "$DRV/rtw8192xbe.c" \
   && ok "8192XBE (0x0192) 2.4G 设备 ID 在位" || bad "8192XBE 设备 ID 缺失"
 grep -q 'RTL8192XB' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
   && ok "740 补丁含 RTL8192XB 支持" || bad "740 补丁缺 RTL8192XB"
-# 板级 NCTL 提前初始化：官方把 NCTL 放在 core_start（太晚），首条 H2C
-# (setup_phycap GET_FEATURE) 会 c2h timeout -> probe -110。必须在 efuse 之后、
-# setup_phycap 之前调用 early NCTL，否则真机芯片初始化失败无 WLAN。
-# 早期 NCTL 实现放在 rtw89_factory.c（整文件复制，不依赖 patch context），
-# 740 补丁只保留 phy.h 声明 + core.c 调用。两段都必须在，且补丁里不能再有
-# phy.c hunk（它曾因内核源码 context 差异反复 patch FAILED）。
-grep -q 'void rtw89_phy_init_rf_nctl_early' "$DRV/rtw89_factory.c" \
-  && ok "rtw89_factory.c 含早期 NCTL 初始化实现" \
-  || bad "rtw89_factory.c 缺 rtw89_phy_init_rf_nctl_early 实现"
-grep -q 'rtw89_phy_init_rf_nctl_early' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
-  && ok "740 补丁含早期 NCTL 声明与调用" \
-  || bad "740 补丁缺 rtw89_phy_init_rf_nctl_early 声明/调用（H2C 握手会超时）"
+# 早期 NCTL 初始化已移除（2026-11-24 真机日志定位）：
+# 之前把 rtw89_phy_init_rf_nctl_early() 塞进 chip_efuse_info_setup()（probe 早期），
+# 但那一刻 BB/RF 尚未 reset/上电（正常路径在 core_start 的 rtw89_chip_reset_bb_rf
+# 之后才做），R_NCTL_CFG=0x8 后 poll 0x8080==0x4 必然 1ms 超时 →
+# "failed to poll nctl block"，且提前写 NCTL 表到错误硬件状态反而可能带坏后续
+# H2C/C2H 握手。已恢复上游原样：NCTL 由 core_start → rtw89_phy_dm_init 在正常
+# 时机初始化。这里反向断言：factory.c / 740 补丁都不得再有 early NCTL 痕迹。
+! grep -q 'rtw89_phy_init_rf_nctl_early' "$DRV/rtw89_factory.c" \
+  && ok "rtw89_factory.c 无 early NCTL（已移除，交还上游正常路径）" \
+  || bad "rtw89_factory.c 仍有 early NCTL 实现（错误时机写 NCTL 会带坏 H2C）"
+! grep -q 'rtw89_phy_init_rf_nctl_early' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
+  && ok "740 补丁无 early NCTL 声明/调用" \
+  || bad "740 补丁仍调用 early NCTL（probe 早期硬件未 ready）"
 ! grep -q '^--- a/drivers/net/wireless/realtek/rtw89/phy.c$' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
   && ok "740 补丁无 phy.c hunk（避免 context 失配 patch FAILED）" \
   || bad "740 补丁仍含 phy.c hunk（内核源码 context 差异会导致 patch FAILED）"
+# rfe_type 强制修正：efuse 未烧录（=255），按原厂 CONFIG_WLAN{0,1}_RFE_TYPE
+# 5G=RFE54 / 2.4G=RFE50 写死（官方驱动里 rfe_type 只影响天线分集与 RFE element）。
+grep -q 'efuse->rfe_type = 54;' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
+  && ok "740 补丁 5G 强制 rfe_type=54（原厂 WLAN0_RFE_TYPE_54）" \
+  || bad "740 补丁缺 5G rfe_type=54 强制修正"
+grep -q 'efuse->rfe_type = 50;' "$DRV/rtw8192xb.c" \
+  && ok "2.4G 驱动强制 rfe_type=50（原厂 WLAN1_RFE_TYPE_50）" \
+  || bad "$DRV/rtw8192xb.c 缺 2.4G rfe_type=50 强制修正"
 # 固件编内核（built-in rtw89/cfg80211 早期 probe 根因修复）：真机日志证实驱动
 # 依次请求 -2/-1/.bin、cfg80211 请求 regulatory.db，全在 rootfs 挂载前，缺一个就
 # sysfs fallback 卡 60s -> probe -22 无 WLAN。故 EXTRA_FIRMWARE 必须列全 6 个。
