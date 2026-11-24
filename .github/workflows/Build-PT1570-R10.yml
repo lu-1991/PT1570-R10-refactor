@@ -422,6 +422,20 @@ jobs:
             echo "::group::BUILD FAILED - last 120 lines"
             tail -n 120 "$LOG"
             echo "::endgroup::"
+            # 诊断：dump CI 内核树里 rtw89/phy.c 的真实 NCTL 函数段，
+            # 用于定位 740 补丁 hunk 为何在此失败（本地 tarball 与 CI 源码差异）。
+            KDIR=$(find build_dir -maxdepth 2 -type d -name 'linux-6.18.*' 2>/dev/null | head -1)
+            if [ -n "$KDIR" ] && [ -f "$KDIR/drivers/net/wireless/realtek/rtw89/phy.c" ]; then
+              echo "::group::DIAG rtw89/phy.c @CI"
+              grep -n 'static void rtw89_phy_init_rf_nctl' "$KDIR/drivers/net/wireless/realtek/rtw89/phy.c" || true
+              awk '/static void rtw89_phy_init_rf_nctl\(/{f=1} f{print NR": "$0} f&&/^}/{n++; if(n>=1) exit}' \
+                "$KDIR/drivers/net/wireless/realtek/rtw89/phy.c" | head -30
+              echo "--- 1855-1875 行 ---"
+              sed -n '1855,1875p' "$KDIR/drivers/net/wireless/realtek/rtw89/phy.c" | cat -n
+              echo "--- .rej ---"
+              cat "$KDIR/drivers/net/wireless/realtek/rtw89/phy.c.rej" 2>/dev/null || echo "(no rej)"
+              echo "::endgroup::"
+            fi
             grep -E 'Error [0-9]|^make(\[[0-9]+\])?: \*\*\*|error:|No such file|No space left|Killed|undefined reference' "$LOG" \
               | tail -n 8 | tr -d '\r' | while IFS= read -r l; do echo "::error::${l//%/%25}"; done
             exit 1

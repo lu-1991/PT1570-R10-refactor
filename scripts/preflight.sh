@@ -386,9 +386,18 @@ grep -q 'RTL8192XB' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
 # 板级 NCTL 提前初始化：官方把 NCTL 放在 core_start（太晚），首条 H2C
 # (setup_phycap GET_FEATURE) 会 c2h timeout -> probe -110。必须在 efuse 之后、
 # setup_phycap 之前调用 early NCTL，否则真机芯片初始化失败无 WLAN。
+# 早期 NCTL 实现放在 rtw89_factory.c（整文件复制，不依赖 patch context），
+# 740 补丁只保留 phy.h 声明 + core.c 调用。两段都必须在，且补丁里不能再有
+# phy.c hunk（它曾因内核源码 context 差异反复 patch FAILED）。
+grep -q 'void rtw89_phy_init_rf_nctl_early' "$DRV/rtw89_factory.c" \
+  && ok "rtw89_factory.c 含早期 NCTL 初始化实现" \
+  || bad "rtw89_factory.c 缺 rtw89_phy_init_rf_nctl_early 实现"
 grep -q 'rtw89_phy_init_rf_nctl_early' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
-  && ok "740 补丁含早期 NCTL 初始化函数" \
-  || bad "740 补丁缺 rtw89_phy_init_rf_nctl_early（H2C 握手会超时）"
+  && ok "740 补丁含早期 NCTL 声明与调用" \
+  || bad "740 补丁缺 rtw89_phy_init_rf_nctl_early 声明/调用（H2C 握手会超时）"
+! grep -q '^--- a/drivers/net/wireless/realtek/rtw89/phy.c$' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
+  && ok "740 补丁无 phy.c hunk（避免 context 失配 patch FAILED）" \
+  || bad "740 补丁仍含 phy.c hunk（内核源码 context 差异会导致 patch FAILED）"
 # 固件编内核（built-in rtw89/cfg80211 早期 probe 根因修复）：真机日志证实驱动
 # 依次请求 -2/-1/.bin、cfg80211 请求 regulatory.db，全在 rootfs 挂载前，缺一个就
 # sysfs fallback 卡 60s -> probe -22 无 WLAN。故 EXTRA_FIRMWARE 必须列全 6 个。

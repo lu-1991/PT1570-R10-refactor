@@ -182,53 +182,9 @@
 +void rtw89_phy_init_rf_nctl_early(struct rtw89_dev *rtwdev);
  void rtw89_phy_config_rf_reg_v1(struct rtw89_dev *rtwdev,
  				const struct rtw89_reg2_def *reg,
---- a/drivers/net/wireless/realtek/rtw89/phy.c
-+++ b/drivers/net/wireless/realtek/rtw89/phy.c
-@@ -1863,5 +1863,41 @@ static void rtw89_phy_init_rf_nctl(struct rtw89_dev *rtwdev)
- 	if (chip->nctl_post_table)
- 		rtw89_rfk_parser(rtwdev, chip->nctl_post_table);
- }
- 
-+/* Board-specific early NCTL init, ported from the vendor AP driver
-+ * (rf_nctl_start).  The vendor brings up the RF front-end NCTL block
-+ * right after firmware download and BEFORE the first H2C/C2H handshake.
-+ * The upstream rtw89 driver only runs this much later in core_start(), which
-+ * is too late for this board: the first H2C (GET_FEATURE in setup_phycap)
-+ * times out because the RF/NCTL block was never triggered, and chip_info
-+ * setup fails with -110.  Call this early from chip_efuse_info_setup() so
-+ * the NCTL preamble + full register table are applied before any firmware
-+ * command is issued.
-+ *
-+ * All register writes go through rtw89_phy_write32() which adds phy->cr_base
-+ * (0x10000), matching the vendor's write32(addr | 0x10000).  Table source is
-+ * chip->nctl_table (the board NCTL regs already present in rtw8192xb_table.c
-+ * and the kernel 8852c table).  At this point fw.elm_info.rf_nctl is still
-+ * NULL (elements not parsed yet), so the board table is definitely used.
-+ */
-+void rtw89_phy_init_rf_nctl_early(struct rtw89_dev *rtwdev)
-+{
-+	const struct rtw89_chip_info *chip = rtwdev->chip;
-+	const struct rtw89_phy_table *nctl_table = chip->nctl_table;
-+
-+	if (!nctl_table)
-+		return;
-+
-+	/* Exact vendor config_nctl preamble: clock/reset for IQK/DPK and RF
-+	 * paths, then trigger the NCTL block (0x8000=8) and poll 0x8080==4. */
-+	rtw89_phy_preinit_rf_nctl(rtwdev);
-+
-+	/* Write the full NCTL register table.  rtw89_phy_config_bb_reg handles
-+	 * the 0xf9-0xfe delay opcodes embedded in the vendor table. */
-+	rtw89_phy_init_reg(rtwdev, nctl_table, rtw89_phy_config_bb_reg, NULL);
-+
-+	if (chip->nctl_post_table)
-+		rtw89_rfk_parser(rtwdev, chip->nctl_post_table);
-+}
-+
- static u32 rtw89_phy0_phy1_offset_ax(struct rtw89_dev *rtwdev, u32 addr)
 --- a/drivers/net/wireless/realtek/rtw89/core.c
 +++ b/drivers/net/wireless/realtek/rtw89/core.c
-@@ -6117,7 +6117,14 @@ static int rtw89_chip_efuse_info_setup(struct rtw89_dev *rtwdev)
+@@ -6117,5 +6117,12 @@ static int rtw89_chip_efuse_info_setup(struct rtw89_dev *rtwdev)
  	ret = mac->parse_phycap_map(rtwdev);
  	if (ret)
  		return ret;
@@ -241,5 +197,3 @@
 +	rtw89_phy_init_rf_nctl_early(rtwdev);
 +
  	ret = rtw89_mac_setup_phycap(rtwdev);
- 	if (ret)
- 		return ret;
