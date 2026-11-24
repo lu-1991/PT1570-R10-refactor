@@ -123,10 +123,13 @@ grep -q 'PROFILE="\${TARGET_MODEL' diy-part2.sh \
   && grep -q 'ALL_DEVICES=' diy-part2.sh \
   && ok "diy-part2 机型选择逻辑在位" || bad "diy-part2 缺机型选择逻辑"
 
-# 主题与软件包口径：design 主题（kenzok8 feed 包），不含 argon/Fluent/tailscale/samba/upnp/wol
+# 主题与软件包口径：design 主题 + 设置页（拉库 ucode 版），不含 argon/Fluent/tailscale/samba/upnp/wol
 grep -q '^CONFIG_PACKAGE_luci-theme-design=y$' "$CFG" \
   && ok "luci-theme-design=y（用户配置口径：默认主题 design）" \
   || bad "$CFG 缺 luci-theme-design"
+grep -q '^CONFIG_PACKAGE_luci-app-design-config=y$' "$CFG" \
+  && ok "luci-app-design-config=y（design 主题设置页编进固件）" \
+  || bad "$CFG 缺 luci-app-design-config（主题设置页不会编进固件）"
 ! grep -q '^CONFIG_PACKAGE_luci-theme-argon=y$' "$CFG" \
   && ok "argon 未启用（主题已换成 design）" \
   || bad "$CFG 仍启用 luci-theme-argon（与 design 抢默认主题）"
@@ -176,6 +179,20 @@ grep -q 'ucode/template/themes/design/header.ut' scripts/overlay-theme.sh \
 ! grep -q 'DST=.*kenzok8/luci-theme-design' scripts/overlay-theme.sh \
   && ok "overlay-theme.sh 不以 kenzok8 feed 作为 design 来源" \
   || bad "overlay-theme.sh 仍从 kenzok8 feed 取 design（老 Lua 模板会 500）"
+# design 主题设置页：同作者 ucode 版；kenzok8 feed 有同名老 Lua 包，必须清掉
+grep -q 'CFG_REPO="https://github.com/felixmm0606/luci-app-design-config.git"' scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 拉库 ucode 版 design-config 设置页" \
+  || bad "overlay-theme.sh 未拉库 design-config 设置页"
+grep -q 'design-config.js' scripts/overlay-theme.sh \
+  && grep -q "form.Map('design'" scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 断言 design-config ucode JS 视图" \
+  || bad "overlay-theme.sh 未断言 design-config ucode 视图"
+grep -q 'feeds/kenzok8/luci-app-design-config' scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 清理 kenzok8 同名老 Lua 包" \
+  || bad "overlay-theme.sh 未清理 kenzok8 同名 design-config（会顶替拉库版）"
+grep -q 'luci-compat|luci-lua-runtime' scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 拒绝 design-config 老 Lua CBI 版" \
+  || bad "overlay-theme.sh 未拒绝 design-config 老 Lua CBI 版"
 for s in 95-tyfza1-argon 97-tyfza1-argon-default; do
   grep -q "$s" scripts/overlay-theme.sh \
     && ok "overlay-theme.sh 删除厂商 $s" || bad "overlay-theme.sh 未删除 $s"

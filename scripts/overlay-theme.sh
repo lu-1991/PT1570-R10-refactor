@@ -13,6 +13,11 @@
 # 包自带 root/etc/uci-defaults/30_luci-theme-design，把
 # luci.main.mediaurlbase 设成 /luci-static/design。
 #
+# 主题设置页 felixmm0606/luci-app-design-config 的 ucode 分支也一起拉库编译：
+# 它读写 design.global.{mode,navbar,navbar_proxy}，与上面主题的 header.ut 读取
+# 同一组 UCI 选项（系统 → Design Config）。kenzok8 feed 里的同名包是老 Lua CBI
+# （luasrc/ + luci-compat），必须清掉，否则顶替拉库版导致菜单/ACL 不生效。
+#
 # "去掉 argon 主题设置"的两处来源（厂商硬件层 20b4cf4）：
 #   1) workflow Clone 步骤原本 checkout 的 package/luci-theme-argon
 #      —— 已改为不 checkout，本脚本再做一次 rm -rf 兜底。
@@ -146,5 +151,64 @@ test -f "$DST/root/etc/uci-defaults/30_luci-theme-design" \
 grep -q '/luci-static/design' "$DST/root/etc/uci-defaults/30_luci-theme-design" \
   || { echo "ERROR: 30_luci-theme-design 未设置 mediaurlbase=/luci-static/design" >&2; exit 1; }
 echo "  OK   design 包结构就位（ucode .ut 模板 + 静态资源 + 默认主题脚本）"
+
+# ---- 6. 拉库：design 主题设置页（luci-app-design-config，ucode 版）----
+# 设置页读写 design.global.{mode,navbar,navbar_proxy}，与 ucode 主题 header.ut
+# 读取的是同一组 UCI 选项；入口在系统 → Design Config。
+# 必须拉 ucode 分支：master 是 Lua CBI（依赖 luci-compat + luci-lua-runtime），
+# 且 kenzok8 feed 有同名老 Lua 包（luasrc/），会顶替拉库版导致菜单/ACL 失效。
+CFG_REPO="https://github.com/felixmm0606/luci-app-design-config.git"
+CFG_REF="ucode"
+CFG_SHA=""                         # 留空=跟分支 HEAD；需要字节级锁定时填 40 位 SHA
+CFG_DST="$WRT/package/luci-app-design-config"
+
+# 6a. 清旧：顶层残留 + kenzok8 feed 同名老 Lua 包实体 + 软链
+rm -rf "$CFG_DST" \
+       "$WRT/feeds/kenzok8/luci-app-design-config" \
+       "$WRT/package/feeds/kenzok8/luci-app-design-config" 2>/dev/null || true
+
+# 6b. 浅克隆 ucode 分支
+git clone --depth=1 --branch "$CFG_REF" "$CFG_REPO" "$CFG_DST"
+if [ -n "$CFG_SHA" ]; then
+  ( cd "$CFG_DST" && git fetch -q --depth=1 origin "$CFG_SHA" && git checkout -q FETCH_HEAD )
+fi
+test -f "$CFG_DST/Makefile" \
+  || { echo "ERROR: design-config 拉库后无 Makefile" >&2; exit 1; }
+rm -rf "$CFG_DST/.git"   # 不带 .git 进包目录
+echo "  OK   design 主题设置页已拉库（$CFG_REPO @ $CFG_REF，ucode JS 视图）"
+
+# 6b-2. 权限收敛：workflow 只对 feeds/luci 下的 ACL 做 0644，本包在 package/ 顶层
+# 不受那段影响；rpcd 会拒绝 world-writable 的 ACL，设置页读写 UCI 就会失败。
+chmod 0644 "$CFG_DST/root/usr/share/rpcd/acl.d/luci-app-design-config.json" \
+           "$CFG_DST/root/usr/share/luci/menu.d/luci-app-design-config.json" 2>/dev/null || true
+
+# 6c. 版本号兜底：PKG_VERSION 若用 '-' 分隔日期，拼 -rN 会两个 '-' → apk invalid
+if grep -qE '^PKG_VERSION:=[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$' "$CFG_DST/Makefile"; then
+  sed -i -E 's/^(PKG_VERSION:=[0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)$/\1.\2/' "$CFG_DST/Makefile"
+  echo "  OK   design-config PKG_VERSION 已改 apk 合法格式：$(grep -E '^PKG_VERSION:=' "$CFG_DST/Makefile" | head -1)"
+else
+  echo "  OK   design-config PKG_VERSION 合法：$(grep -E '^PKG_VERSION:=' "$CFG_DST/Makefile" | head -1)"
+fi
+
+# 6d. 断言：必须是纯 ucode 包（JS 视图 + menu.d + ACL + UCI 配置），无老 Lua 残留
+grep -q 'luci.mk' "$CFG_DST/Makefile" \
+  || { echo "ERROR: design-config Makefile 未 include luci.mk" >&2; exit 1; }
+test -f "$CFG_DST/htdocs/luci-static/resources/view/design-config.js" \
+  || { echo "ERROR: design-config 缺 ucode JS 视图" >&2; exit 1; }
+grep -q "form.Map('design'" "$CFG_DST/htdocs/luci-static/resources/view/design-config.js" \
+  || { echo "ERROR: design-config JS 未操作 UCI design 包" >&2; exit 1; }
+test -f "$CFG_DST/root/usr/share/luci/menu.d/luci-app-design-config.json" \
+  || { echo "ERROR: design-config 缺 ucode menu.d 入口" >&2; exit 1; }
+test -f "$CFG_DST/root/usr/share/rpcd/acl.d/luci-app-design-config.json" \
+  || { echo "ERROR: design-config 缺 rpcd ACL" >&2; exit 1; }
+test -f "$CFG_DST/root/etc/config/design" \
+  || { echo "ERROR: design-config 缺 /etc/config/design" >&2; exit 1; }
+if grep -qE 'luci-compat|luci-lua-runtime' "$CFG_DST/Makefile"; then
+  echo "ERROR: design-config 拉到了 Lua CBI 老版（依赖 luci-compat/luci-lua-runtime）" >&2
+  exit 1
+fi
+test ! -d "$CFG_DST/luasrc" \
+  || { echo "ERROR: design-config 含 luasrc/（老 Lua 版，不是 ucode）" >&2; exit 1; }
+echo "  OK   design-config 包结构就位（ucode JS 视图 + menu.d + ACL + UCI 配置）"
 
 echo "🎉 overlay-theme.sh 完成"
