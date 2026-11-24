@@ -75,6 +75,28 @@ git -C "$DST" checkout -q FETCH_HEAD
 GOT="$(git -C "$DST" rev-parse HEAD)"
 echo "  OK   design 主题已拉到 package/luci-theme-design @ ${GOT:0:12}"
 
+# ---- 3.5 消除 kenzok8 feed 的同名 design 包 + 修 apk 版本号 ----
+# kenzok8 feed（feeds.conf.default 里 src-git kenzok8）也收录了同一份
+# 0x676e67/luci-theme-design（版本同样是 5.8.0-20240106）。feeds install -a
+# 会把它软链到 package/feeds/kenzok8/luci-theme-design，实测 CI 编译走的正是
+# 那份 feeds 包而非上面拉库的 package/ 那份。删掉软链 + feed 实体，确保
+# 唯一生效的是本脚本拉库的包（用户要求"直接拉库编译"）。
+rm -rf "$WRT/package/feeds/kenzok8/luci-theme-design" 2>/dev/null || true
+rm -rf "$WRT/feeds/kenzok8/luci-theme-design" 2>/dev/null || true
+echo "  OK   kenzok8 feed 同名 design 包已移除（避免顶掉拉库那份）"
+
+# 上游 PKG_VERSION=5.8.0-20240106 用 '-' 分隔日期，拼上 PKG_RELEASE 后是
+# 5.8.0-20240106-r1（两个 '-'）。新版 apk 只允许一个 '-rN' 作 revision，
+# 于是报 "package version is invalid" 并 Error 99 中断整个 build。
+# 把日期分隔符改成 '.'：5.8.0.20240106-r1 —— apk 合法，版本号语义不变。
+if grep -qE '^PKG_VERSION:=[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$' "$DST/Makefile"; then
+  sed -i -E 's/^(PKG_VERSION:=[0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)$/\1.\2/' "$DST/Makefile"
+  echo "  OK   PKG_VERSION 已改为 apk 合法格式：$(grep -E '^PKG_VERSION:=' "$DST/Makefile" | head -1)"
+else
+  echo "::warning::design 主题 PKG_VERSION 非预期格式，跳过修正（上游可能已更新）"
+  grep -E '^PKG_VERSION:=' "$DST/Makefile" | head -1 || true
+fi
+
 # ---- 4. 断言：包结构 + 默认主题脚本在位 ----
 test -f "$DST/Makefile" \
   || { echo "ERROR: design 主题 Makefile 缺失" >&2; exit 1; }

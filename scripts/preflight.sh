@@ -173,6 +173,16 @@ done
 grep -q '/luci-static/design' scripts/overlay-theme.sh \
   && ok "overlay-theme.sh 断言 design 默认主题脚本" \
   || bad "overlay-theme.sh 缺 design 默认主题断言"
+# 防止 kenzok8 feed 同名包顶掉拉库那份（CI 曾因此编译了 feeds 版而非拉库版）
+grep -q 'package/feeds/kenzok8/luci-theme-design' scripts/overlay-theme.sh \
+  && grep -q 'feeds/kenzok8/luci-theme-design' scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 清除 kenzok8 feed 同名 design 包" \
+  || bad "overlay-theme.sh 未清除 kenzok8 feed 同名包（会顶掉拉库版）"
+# PKG_VERSION 日期里的 '-' 会让 apk 报 package version is invalid（Error 99）
+grep -q 'PKG_VERSION:=' scripts/overlay-theme.sh \
+  && grep -qE "s/\^\(PKG_VERSION" scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 修正 PKG_VERSION为 apk 合法格式" \
+  || bad "overlay-theme.sh 未修正 PKG_VERSION（apk 会判非法版本 Error 99）"
 
 # ---------------------------------------------------------------
 sec "5. workflow 结构与防回归"
