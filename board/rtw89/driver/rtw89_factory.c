@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 
+#include <linux/delay.h>
+#include <linux/firmware.h>
 #include <linux/nvmem-consumer.h>
 
 #include "core.h"
 #include "debug.h"
+#include "reg.h"
 #include "rtw89_factory.h"
 
 #define RTW89_FACTORY_CELL_NAME		"wifi-calibration"
@@ -187,4 +190,92 @@ void rtw89_factory_fill_tssi(struct rtw89_dev *rtwdev,
 		memcpy(tssi->tssi_mcs[i] + RTW89_FACTORY_TSSI_MCS_2G_NUM,
 		       cal->tssi_mcs_5g[i], RTW89_FACTORY_TSSI_MCS_5G_NUM);
 	}
+}
+
+/* PT1570-R10 board RF front-end needs the vendor NCTL array before the
+ * first H2C/C2H handshake.  This is a 1:1 port of the vendor rtl_ax_ap
+ * sequence (rf-start.h: rtl_ax_rf_nctl_start): trigger NCTL at 0x18000,
+ * poll 0x18080 up to 1000 times but continue regardless, then write the
+ * register pairs with the PHY base 0x10000 added.  Delays 0xf9..0xfe are
+ * opcode markers in the vendor array, not real registers.
+ */
+#define RTW89_FACTORY_NCTL_CFG		0x18000
+#define RTW89_FACTORY_NCTL_STS		0x18080
+#define RTW89_FACTORY_NCTL_PHY_BASE	0x10000
+
+static u32 rtw89_factory_le32(const u8 *p)
+{
+	return (u32)p[0] | ((u32)p[1] << 8) |
+	       ((u32)p[2] << 16) | ((u32)p[3] << 24);
+}
+
+void rtw89_factory_nctl_start(struct rtw89_dev *rtwdev)
+{
+	static const u32 delay_us[6] = { 1, 5, 50, 1000, 5000, 50000 };
+	const struct firmware *fw;
+	unsigned int pairs, i;
+	const char *name;
+	u32 cv;
+	int ret;
+
+	switch (rtwdev->chip->chip_id) {
+	case RTL8852C:
+		cv = (rtw89_read32(rtwdev, 0x00f0) >> 12) & 0xf;
+		name = cv ? "realtek/tyfza1/array_mp_8852c_nctl_reg.bin"
+			  : "realtek/tyfza1/array_mp_8852c_nctl_reg_a.bin";
+		pairs = cv ? 1782 : 1769;
+		break;
+	case RTL8192XB:
+		cv = 0;
+		name = "realtek/tyfza1/array_mp_8192xb_nctl_reg.bin";
+		pairs = 1421;
+		break;
+	default:
+		return;
+	}
+
+	ret = request_firmware(&fw, name, rtwdev->dev);
+	if (ret) {
+		rtw89_info(rtwdev, "factory NCTL %s request failed ret=%d\n",
+			   name, ret);
+		return;
+	}
+	if (fw->size != pairs * 8) {
+		rtw89_info(rtwdev, "factory NCTL %s size=%zu expected=%u\n",
+			   name, fw->size, pairs * 8);
+		release_firmware(fw);
+		return;
+	}
+
+	/* Vendor preamble: force IQK/DPK path clocks, then trigger NCTL. */
+	rtw89_write32_mask(rtwdev, 0x10c60, 0x3, 0x3);
+	rtw89_write32_set(rtwdev, 0x10c6c, BIT(0));
+	rtw89_write32_set(rtwdev, 0x158ac, BIT(27));
+	rtw89_write32_set(rtwdev, 0x178ac, BIT(27));
+	rtw89_write32(rtwdev, RTW89_FACTORY_NCTL_CFG, 8);
+
+	/* Vendor polls 1000 times and continues even if the block never
+	 * reports ready -- deliberately not a hard failure. */
+	for (i = 0; i < 1000; i++) {
+		rtw89_write32(rtwdev, RTW89_FACTORY_NCTL_STS, 4);
+		udelay(1);
+		if (rtw89_read32(rtwdev, RTW89_FACTORY_NCTL_STS) == 4)
+			break;
+	}
+
+	for (i = 0; i < pairs; i++) {
+		u32 addr = rtw89_factory_le32(fw->data + i * 8);
+		u32 data = rtw89_factory_le32(fw->data + i * 8 + 4);
+
+		if (addr >= 0xf9 && addr <= 0xfe)
+			udelay(delay_us[addr - 0xf9]);
+		else
+			rtw89_write32(rtwdev,
+				      addr | RTW89_FACTORY_NCTL_PHY_BASE,
+				      data);
+	}
+	release_firmware(fw);
+
+	rtw89_info(rtwdev, "factory NCTL %s pairs=%u cv=%u poll=%u done\n",
+		   name, pairs, cv, i);
 }

@@ -42,5 +42,6 @@ void rtw89_factory_fill_gain(struct rtw89_dev *rtwdev,
 			     struct rtw89_factory_cal *cal);
 void rtw89_factory_fill_tssi(struct rtw89_dev *rtwdev,
 			     struct rtw89_factory_cal *cal);
+void rtw89_factory_nctl_start(struct rtw89_dev *rtwdev);
 
 #endif

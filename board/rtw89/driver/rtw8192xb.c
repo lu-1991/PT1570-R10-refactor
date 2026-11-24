@@ -429,6 +429,10 @@ static int rtw8192xb_read_efuse(struct rtw89_dev *rtwdev, u8 *log_map,
 		rtw89_factory_fill_tssi(rtwdev, cal);
 	}
 
+	/* Vendor NCTL array must be applied after firmware download and
+	 * before the first H2C/C2H handshake, otherwise probe fails -110. */
+	rtw89_factory_nctl_start(rtwdev);
+
 	return 0;
 }
 

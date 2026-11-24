@@ -421,19 +421,36 @@ grep -q 'PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x0192)' "$DRV/rtw8192xbe.c" \
   && ok "8192XBE (0x0192) 2.4G 设备 ID 在位" || bad "8192XBE 设备 ID 缺失"
 grep -q 'RTL8192XB' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
   && ok "740 补丁含 RTL8192XB 支持" || bad "740 补丁缺 RTL8192XB"
-# 早期 NCTL 初始化已移除（2026-11-24 真机日志定位）：
-# 之前把 rtw89_phy_init_rf_nctl_early() 塞进 chip_efuse_info_setup()（probe 早期），
-# 但那一刻 BB/RF 尚未 reset/上电（正常路径在 core_start 的 rtw89_chip_reset_bb_rf
-# 之后才做），R_NCTL_CFG=0x8 后 poll 0x8080==0x4 必然 1ms 超时 →
-# "failed to poll nctl block"，且提前写 NCTL 表到错误硬件状态反而可能带坏后续
-# H2C/C2H 握手。已恢复上游原样：NCTL 由 core_start → rtw89_phy_dm_init 在正常
-# 时机初始化。这里反向断言：factory.c / 740 补丁都不得再有 early NCTL 痕迹。
+# 板级 NCTL：恢复上游零差异后真机仍是 rfe_type=255 + c2h timeout / deadbeef，
+# 证明上游在 core_start 才做 NCTL 对这块板太晚。现按原厂 rtl_ax_ap 的
+# rf-start.h 1:1 移植到 rtw89_factory.c，并在两张卡 read_efuse 里
+# （固件下载后、首个 H2C 前）调用。旧 early NCTL 符号必须彻底消失。
+grep -q 'void rtw89_factory_nctl_start' "$DRV/rtw89_factory.c" \
+  && ok "rtw89_factory.c 实现原厂 NCTL 启动序列" \
+  || bad "rtw89_factory.c 缺 rtw89_factory_nctl_start"
+grep -q 'rtw89_factory_nctl_start(rtwdev);' "$DRV/rtw8192xb.c" \
+  && ok "2.4G read_efuse 调用原厂 NCTL" \
+  || bad "rtw8192xb.c 未在 read_efuse 调用原厂 NCTL"
+grep -q 'rtw89_factory_nctl_start(rtwdev);' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
+  && ok "5G read_efuse 调用原厂 NCTL" \
+  || bad "740 补丁未在 8852c read_efuse 调用原厂 NCTL"
 ! grep -q 'rtw89_phy_init_rf_nctl_early' "$DRV/rtw89_factory.c" \
-  && ok "rtw89_factory.c 无 early NCTL（已移除，交还上游正常路径）" \
-  || bad "rtw89_factory.c 仍有 early NCTL 实现（错误时机写 NCTL 会带坏 H2C）"
-! grep -q 'rtw89_phy_init_rf_nctl_early' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
-  && ok "740 补丁无 early NCTL 声明/调用" \
-  || bad "740 补丁仍调用 early NCTL（probe 早期硬件未 ready）"
+    board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
+  && ok "无旧 early NCTL 残留（错误时机已弃用）" \
+  || bad "仍残留 rtw89_phy_init_rf_nctl_early"
+for fw in array_mp_8852c_nctl_reg.bin array_mp_8852c_nctl_reg_a.bin \
+          array_mp_8192xb_nctl_reg.bin; do
+  [ -s "board/rtw89/firmware/realtek/tyfza1/$fw" ] \
+    && ok "原厂 NCTL 表 $fw 在位" \
+    || bad "缺原厂 NCTL 表 board/rtw89/firmware/realtek/tyfza1/$fw"
+done
+for md5 in e20b3273736b3332e25b0678d6acb891 \
+           b8ce8294af3206b049ef3b9e549c7540 \
+           ed4267149a9d335aa5538edb63ae9045; do
+  grep -q "$md5" scripts/overlay-rtw89.sh \
+    && ok "overlay 锁原厂 NCTL 表 md5 ${md5:0:8}" \
+    || bad "overlay 未锁原厂 NCTL 表 md5 ${md5:0:8}"
+done
 ! grep -q '^--- a/drivers/net/wireless/realtek/rtw89/phy.c$' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
   && ok "740 补丁无 phy.c hunk（避免 context 失配 patch FAILED）" \
   || bad "740 补丁仍含 phy.c hunk（内核源码 context 差异会导致 patch FAILED）"
@@ -453,10 +470,14 @@ grep -q '77e2137956b17f91ea8ab58db6c80f98' scripts/overlay-rtw89.sh \
   && ok "overlay-rtw89.sh 锁上游固件 md5（防误换 rtl_ax_ap 原厂固件）" \
   || bad "overlay-rtw89.sh 未锁上游固件 md5"
 # 固件编内核（built-in rtw89/cfg80211 早期 probe 根因修复）：真机日志证实驱动
-# 依次请求 -2/-1/.bin、cfg80211 请求 regulatory.db，全在 rootfs 挂载前，缺一个就
-# sysfs fallback 卡 60s -> probe -22 无 WLAN。故 EXTRA_FIRMWARE 必须列全 6 个。
+# 依次请求 -2/-1/.bin、cfg80211 请求 regulatory.db，原厂 NCTL 表也在 read_efuse
+# 阶段请求，全在 rootfs 挂载前，缺一个就 sysfs fallback 卡 60s -> probe -110/-22。
+# 故 EXTRA_FIRMWARE 必须列全 9 个。
 for fw in rtw89/rtw8852c_fw-2.bin rtw89/rtw8852c_fw-1.bin rtw89/rtw8852c_fw.bin \
-          rtw89/rtw8192xb_fw.bin regulatory.db regulatory.db.p7s; do
+          rtw89/rtw8192xb_fw.bin regulatory.db regulatory.db.p7s \
+          realtek/tyfza1/array_mp_8852c_nctl_reg.bin \
+          realtek/tyfza1/array_mp_8852c_nctl_reg_a.bin \
+          realtek/tyfza1/array_mp_8192xb_nctl_reg.bin; do
   grep -q "CONFIG_EXTRA_FIRMWARE=\".*$fw" scripts/overlay-rtw89.sh \
     && ok "overlay 内置固件 $fw (EXTRA_FIRMWARE)" \
     || bad "overlay 的 EXTRA_FIRMWARE 缺 $fw（早期 fallback 60s 后 probe 失败）"

@@ -347,9 +347,10 @@ jobs:
       # rtw89 固件双链路校验（真机 TTL 日志定位）：
       #  built-in rtw89/cfg80211 在 rootfs(fit0) 挂载前 372s 就 probe，固件在
       #  rootfs 里读不到 -> 每个名字 sysfs fallback 卡 60s -> probe -22 无 WLAN。
-      #  A) 内核内置：board/rtw89/firmware/ 下 6 个文件，含 5G 探测序列
-      #     -2.bin/-1.bin/.bin 三个别名 + 2.4G + regulatory.db(.p7s)，
-      #     由 CONFIG_EXTRA_FIRMWARE 编进内核，early probe 直接命中。
+      #  A) 内核内置：board/rtw89/firmware/ 下 9 个文件，含 5G 探测序列
+      #     -2.bin/-1.bin/.bin 三个别名 + 2.4G + regulatory.db(.p7s) +
+      #     realtek/tyfza1/ 下三个原厂 NCTL 表。read_efuse 阶段也要
+      #     request_firmware NCTL，必须同样编进内核，early probe 直接命中。
       #  B) rootfs 兜底：files/lib/firmware/rtw89/ 下 2 个，运行时重载可用。
       - name: Verify rtw89 firmware (builtin + rootfs)
         run: |
@@ -363,6 +364,13 @@ jobs:
           for fw in regulatory.db regulatory.db.p7s; do
             [ -s "$B/$fw" ] || { echo "::error::缺内置 regdb $fw"; exit 1; }
           done
+          N="$B/realtek/tyfza1"
+          for fw in array_mp_8852c_nctl_reg.bin array_mp_8852c_nctl_reg_a.bin \
+                    array_mp_8192xb_nctl_reg.bin; do
+            [ -s "$N/$fw" ] || { echo "::error::缺原厂 NCTL 表 $fw"; exit 1; }
+            sz=$(stat -c %s "$N/$fw")
+            [ "$sz" -gt 10000 ] || { echo "::error::原厂 NCTL 表 $fw 大小异常 $sz"; exit 1; }
+          done
           for alias in rtw8852c_fw-2.bin rtw8852c_fw-1.bin; do
             cmp -s "$B/$alias" "$B/rtw8852c_fw.bin" \
               || { echo "::error::$alias 与 5G 固件内容不一致"; exit 1; }
@@ -373,20 +381,26 @@ jobs:
             sz=$(stat -c %s "$T/$fw")
             [ "$sz" -gt 100000 ] || { echo "::error::$fw 大小异常 $sz"; exit 1; }
           done
-          # 确认内核 config 真的把 6 个固件都编进去了（overlay 已跑过）
+          # 确认内核 config 真的把 9 个固件都编进去了（overlay 已跑过）
           CFG="/workdir/openwrt/target/linux/rtl9617c/config-6.18"
           for fw in rtw89/rtw8852c_fw-2.bin rtw89/rtw8852c_fw-1.bin rtw89/rtw8852c_fw.bin \
-                    rtw89/rtw8192xb_fw.bin regulatory.db regulatory.db.p7s; do
+                    rtw89/rtw8192xb_fw.bin regulatory.db regulatory.db.p7s \
+                    realtek/tyfza1/array_mp_8852c_nctl_reg.bin \
+                    realtek/tyfza1/array_mp_8852c_nctl_reg_a.bin \
+                    realtek/tyfza1/array_mp_8192xb_nctl_reg.bin; do
             grep -q "CONFIG_EXTRA_FIRMWARE=\".*$fw" "$CFG" \
               || { echo "::error::config-6.18 的 EXTRA_FIRMWARE 缺 $fw"; exit 1; }
           done
           fwdir="/workdir/openwrt/target/linux/rtl9617c/files-6.18/firmware"
           for fw in rtw89/rtw8852c_fw-2.bin rtw89/rtw8852c_fw-1.bin rtw89/rtw8852c_fw.bin \
-                    rtw89/rtw8192xb_fw.bin regulatory.db regulatory.db.p7s; do
+                    rtw89/rtw8192xb_fw.bin regulatory.db regulatory.db.p7s \
+                    realtek/tyfza1/array_mp_8852c_nctl_reg.bin \
+                    realtek/tyfza1/array_mp_8852c_nctl_reg_a.bin \
+                    realtek/tyfza1/array_mp_8192xb_nctl_reg.bin; do
             [ -s "$fwdir/$fw" ] \
               || { echo "::error::内核 files-6.18 缺 $fw（EXTRA_FIRMWARE 会编译失败）"; exit 1; }
           done
-          echo "RTW89_FIRMWARE_OK=True (builtin 6 + rootfs 2, -2/-1.bin alias OK)"
+          echo "RTW89_FIRMWARE_OK=True (builtin 9 + rootfs 2, -2/-1.bin alias OK)"
 
       - name: Run static preflight
         working-directory: ${{ github.workspace }}

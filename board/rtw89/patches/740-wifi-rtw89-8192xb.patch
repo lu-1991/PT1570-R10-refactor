@@ -161,7 +161,7 @@
  	struct rtw8852c_efuse *map;
  
  	map = (struct rtw8852c_efuse *)log_map;
-@@ -519,6 +521,13 @@ static int rtw8852c_read_efuse(struct rt
+@@ -519,6 +521,14 @@ static int rtw8852c_read_efuse(struct rt
  
  	rtw89_info(rtwdev, "chip rfe_type is %d\n", efuse->rfe_type);
  
@@ -171,6 +171,7 @@
 +		rtw89_factory_fill_gain(rtwdev, cal);
 +		rtw89_factory_fill_tssi(rtwdev, cal);
 +	}
++	rtw89_factory_nctl_start(rtwdev);
 +
  	return 0;
  }

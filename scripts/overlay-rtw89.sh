@@ -20,10 +20,11 @@
 #      （开 rtw89 + NVMEM + MTD_UBI_NVMEM，关 rtl_ax_ap）
 #   4. DTS nvmem 绑定    -> R10 DTS 的 &pcie0/&pcie1 wifi 节点
 #   5. 固件             -> 双链路：
-#      a) 编进内核（CONFIG_EXTRA_FIRMWARE）：board/rtw89/firmware/ 下 6 个 ->
+#      a) 编进内核（CONFIG_EXTRA_FIRMWARE）：board/rtw89/firmware/ 下 9 个 ->
 #         files-6.18/firmware/，含 5G 探测序列 rtw8852c_fw-2.bin / -1.bin /
-#         .bin 三个别名 + rtw8192xb_fw.bin + regulatory.db(.p7s)。
-#         built-in 驱动/cfg80211 早期 probe 直接命中，不依赖 rootfs（根因修复）。
+#         .bin 三个别名 + rtw8192xb_fw.bin + regulatory.db(.p7s) +
+#         realtek/tyfza1/ 下三个原厂 NCTL 表。built-in 驱动/cfg80211 早期
+#         probe/read_efuse 直接命中，不依赖 rootfs（根因修复）。
 #         真机日志证实：rtw89 请求 -2/-1/.bin、cfg80211 请求 regulatory.db，
 #         全部发生在 rootfs(fit0) 挂载前 372s，sysfs fallback 每个卡 60s。
 #      b) rootfs 兜底（files/lib/firmware/rtw89/ 下 2 个，workflow cp）。
@@ -46,11 +47,15 @@ DRV_DST="$WRT/target/linux/rtl9617c/files-6.18/drivers/net/wireless/realtek/rtw8
 FW_DST="$WRT/target/linux/rtl9617c/files-6.18/firmware/rtw89"
 # regulatory.db 由 cfg80211(built-in) 从固件根请求，路径不带 rtw89/ 前缀
 REGDB_DST="$WRT/target/linux/rtl9617c/files-6.18/firmware"
+# 原厂 NCTL 表：rtw89 built-in probe 在 rootfs 挂载前 request_firmware，
+# 必须和 WiFi 固件一样编进内核，不能只放 rootfs。
+NCTL_SRC="$FW_SRC/realtek/tyfza1"
+NCTL_DST="$REGDB_DST/realtek/tyfza1"
 PATCH_DST="$WRT/target/linux/rtl9617c/patches-6.18/740-wifi-rtw89-8192xb.patch"
 CFG="$WRT/target/linux/rtl9617c/config-6.18"
 DTS="$WRT/target/linux/rtl9617c/dts/rtl9617c-pt1570-r10.dts"
 
-for f in "$DRV_SRC" "$PATCH_SRC" "$FW_SRC" "$CFG" "$DTS"; do
+for f in "$DRV_SRC" "$PATCH_SRC" "$FW_SRC" "$NCTL_SRC" "$CFG" "$DTS"; do
   [ -e "$f" ] || fail "缺少 $f"
 done
 
@@ -94,6 +99,10 @@ declare -A FW_MD5=(
   [rtw8852c_fw-1.bin]='77e2137956b17f91ea8ab58db6c80f98'
   [rtw8852c_fw.bin]='77e2137956b17f91ea8ab58db6c80f98'
   [rtw8192xb_fw.bin]='3b4aae53a44010a4995460d41be9163b'
+  # 原厂 NCTL 表（1:1 来自 factory 卷，禁止用空表/错 CV 表替代）
+  [array_mp_8852c_nctl_reg.bin]='e20b3273736b3332e25b0678d6acb891'
+  [array_mp_8852c_nctl_reg_a.bin]='b8ce8294af3206b049ef3b9e549c7540'
+  [array_mp_8192xb_nctl_reg.bin]='ed4267149a9d335aa5538edb63ae9045'
 )
 for fw in rtw8852c_fw-2.bin rtw8852c_fw-1.bin rtw8852c_fw.bin rtw8192xb_fw.bin; do
   actual=$(md5sum "$FW_SRC/$fw" | awk '{print $1}')
@@ -102,7 +111,15 @@ for fw in rtw8852c_fw-2.bin rtw8852c_fw-1.bin rtw8852c_fw.bin rtw8192xb_fw.bin; 
 done
 echo "  OK   4 个 WiFi 固件 md5 与上游 fd909a3 一致"
 
-mkdir -p "$FW_DST" "$REGDB_DST"
+for fw in array_mp_8852c_nctl_reg.bin array_mp_8852c_nctl_reg_a.bin \
+          array_mp_8192xb_nctl_reg.bin; do
+  actual=$(md5sum "$NCTL_SRC/$fw" | awk '{print $1}')
+  [ "$actual" = "${FW_MD5[$fw]}" ] \
+    || fail "原厂 NCTL 表 $fw md5=$actual 非 factory 备份原版 ${FW_MD5[$fw]}"
+done
+echo "  OK   3 个原厂 NCTL 表 md5 与 factory 备份一致"
+
+mkdir -p "$FW_DST" "$REGDB_DST" "$NCTL_DST"
 fw_n=0
 for fw in rtw8852c_fw-2.bin rtw8852c_fw-1.bin rtw8852c_fw.bin rtw8192xb_fw.bin; do
   [ -f "$FW_SRC/$fw" ] || fail "缺少固件源 $FW_SRC/$fw"
@@ -115,8 +132,14 @@ for fw in regulatory.db regulatory.db.p7s; do
   cp -f "$FW_SRC/$fw" "$REGDB_DST/$fw"
   fw_n=$((fw_n + 1))
 done
-[ "$fw_n" -eq 6 ] || fail "内置固件总数 $fw_n != 6"
-echo "  固件 $fw_n 个已落地 files-6.18/firmware（WiFi 4 + regdb 2，含 5G -2/-1 别名）"
+for fw in array_mp_8852c_nctl_reg.bin array_mp_8852c_nctl_reg_a.bin \
+          array_mp_8192xb_nctl_reg.bin; do
+  [ -f "$NCTL_SRC/$fw" ] || fail "缺少原厂 NCTL 表源 $NCTL_SRC/$fw"
+  cp -f "$NCTL_SRC/$fw" "$NCTL_DST/$fw"
+  fw_n=$((fw_n + 1))
+done
+[ "$fw_n" -eq 9 ] || fail "内置固件总数 $fw_n != 9"
+echo "  固件 $fw_n 个已落地 files-6.18/firmware（WiFi 4 + regdb 2 + NCTL 3）"
 
 # ---- 2. 内核补丁 ----
 cp -f "$PATCH_SRC" "$PATCH_DST"
@@ -289,10 +312,11 @@ new = [
     'CONFIG_MTD_UBI_NVMEM=y',
     # ===== 固件编进内核：解决 built-in 驱动早期 probe 读不到 rootfs 固件 =====
     # 真机日志：rtw89 5G 请求 -2.bin/-1.bin/.bin 三次，cfg80211 请求 regulatory.db，
-    # 全在 rootfs(fit0) 挂载前，每次 sysfs fallback 卡 60s -> probe -22 无 WLAN。
-    # 三个 5G 别名 + 2.4G + regulatory.db(.p7s) 全部内置，早期 probe 直接命中。
+    # 原厂 NCTL 表也在 read_efuse 阶段（rootfs 挂载前）request_firmware，
+    # 每次 sysfs fallback 卡 60s -> probe -110/-22 无 WLAN。
+    # 三个 5G 别名 + 2.4G + regulatory.db(.p7s) + 三个原厂 NCTL 表全部内置。
     # DIR=firmware 相对内核源码根；固件由 1b 步放到 files-6.18/firmware/。
-    'CONFIG_EXTRA_FIRMWARE="rtw89/rtw8852c_fw-2.bin rtw89/rtw8852c_fw-1.bin rtw89/rtw8852c_fw.bin rtw89/rtw8192xb_fw.bin regulatory.db regulatory.db.p7s"',
+    'CONFIG_EXTRA_FIRMWARE="rtw89/rtw8852c_fw-2.bin rtw89/rtw8852c_fw-1.bin rtw89/rtw8852c_fw.bin rtw89/rtw8192xb_fw.bin regulatory.db regulatory.db.p7s realtek/tyfza1/array_mp_8852c_nctl_reg.bin realtek/tyfza1/array_mp_8852c_nctl_reg_a.bin realtek/tyfza1/array_mp_8192xb_nctl_reg.bin"',
     'CONFIG_EXTRA_FIRMWARE_DIR="firmware"',
 ]
 p.write_text('\n'.join(lines + new) + '\n', encoding='utf-8', newline='\n')
@@ -315,9 +339,13 @@ done
 grep -qx '# CONFIG_RTL_AX_AP is not set' "$CFG" \
   || fail "config 未显式关闭 CONFIG_RTL_AX_AP（只删行会让 syncconfig 按默认=m 重开，编译撞 pe-tx-code.h）"
 ! grep -q '^CONFIG_RTL_AX_AP=' "$CFG" || fail "config 仍有 CONFIG_RTL_AX_AP=m/y（两套驱动会抢 PCI 设备）"
-# EXTRA_FIRMWARE 必须含真机日志请求的全部固件名（-2/-1/.bin + 2.4G + regdb）
+# EXTRA_FIRMWARE 必须含真机日志请求的全部固件名
+# （-2/-1/.bin + 2.4G + regdb + 三个原厂 NCTL 表）
 for fw in rtw89/rtw8852c_fw-2.bin rtw89/rtw8852c_fw-1.bin rtw89/rtw8852c_fw.bin \
-          rtw89/rtw8192xb_fw.bin regulatory.db regulatory.db.p7s; do
+          rtw89/rtw8192xb_fw.bin regulatory.db regulatory.db.p7s \
+          realtek/tyfza1/array_mp_8852c_nctl_reg.bin \
+          realtek/tyfza1/array_mp_8852c_nctl_reg_a.bin \
+          realtek/tyfza1/array_mp_8192xb_nctl_reg.bin; do
   grep -q "^CONFIG_EXTRA_FIRMWARE=\".*$fw.*\"$" "$CFG" \
     || fail "config 的 EXTRA_FIRMWARE 缺 $fw（早期 probe 会 sysfs fallback 卡 60s 后失败）"
 done
@@ -370,8 +398,8 @@ grep -q 'nvmem-cells = <&wifi_cal_radio1>' "$DTS" || fail "2.4G 校准 cell 未�
 echo "  DTS: pcie0(5G)/pcie1(2.4G) 已绑定 factory 校准 cell"
 
 # ---- 5. 固件落地校验（两条链路） ----
-# 链路 A（内核 built-in）：files-6.18/firmware/ 下 6 个文件（WiFi 4 含 -2/-1 别名
-#   + regdb 2），由 CONFIG_EXTRA_FIRMWARE 编进内核，early probe 可读（1b 已落地）。
+# 链路 A（内核 built-in）：files-6.18/firmware/ 下 9 个文件（WiFi 4 含 -2/-1 别名
+#   + regdb 2 + 原厂 NCTL 3），由 CONFIG_EXTRA_FIRMWARE 编进内核，early probe 可读。
 # 链路 B（rootfs 兜底）：files/lib/firmware/rtw89/ 下 2 个文件，workflow cp 进 rootfs，
 #   供运行时固件重载使用。
 for fw in rtw8852c_fw-2.bin rtw8852c_fw-1.bin rtw8852c_fw.bin rtw8192xb_fw.bin; do
@@ -384,11 +412,17 @@ for fw in regulatory.db regulatory.db.p7s; do
   [ -f "$f" ] || fail "缺内置 regdb $f"
   [ -s "$f" ] || fail "内置 regdb $f 为空"
 done
+for fw in array_mp_8852c_nctl_reg.bin array_mp_8852c_nctl_reg_a.bin \
+          array_mp_8192xb_nctl_reg.bin; do
+  f="$NCTL_DST/$fw"
+  [ -f "$f" ] || fail "缺内置原厂 NCTL 表 $f"
+  [ "$(stat -c %s "$f")" -gt 10000 ] || fail "原厂 NCTL 表 $fw 大小异常"
+done
 for fw in rtw8192xb_fw.bin rtw8852c_fw.bin; do
   f="$ASSETS/files/lib/firmware/rtw89/$fw"
   [ -f "$f" ] || fail "缺固件 $f"
   [ "$(stat -c %s "$f")" -gt 100000 ] || fail "固件 $fw 大小异常"
 done
-echo "  rtw89 固件就位（内核内置 WiFi 4 + regdb 2，rootfs 2）"
+echo "  rtw89 固件就位（内核内置 WiFi 4 + regdb 2 + NCTL 3，rootfs 2）"
 
-echo "RTW89_OVERLAY_OK=True (driver 6 + patch 1 + config + dts + fw builtin6/rootfs2)"
+echo "RTW89_OVERLAY_OK=True (driver 6 + patch 1 + config + dts + fw builtin9/rootfs2)"
