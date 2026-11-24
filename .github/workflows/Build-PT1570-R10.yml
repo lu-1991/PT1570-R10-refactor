@@ -184,7 +184,8 @@ jobs:
 
           # 补齐 PON / WiFi / LED / LuCI 包与工具修复（refactor 分支没有这些）。
           # 不再 checkout argon 主题包：主题已改为 design，
-          # 由 diy-part1.sh 调 scripts/overlay-theme.sh 直接拉库编译。
+          # 用 kenzok8 feed 自带的 luci-theme-design，diy-part1.sh 调
+          # scripts/overlay-theme.sh 修版本号并清除厂商 argon 设置。
           git checkout -q "$HW_REF" -- \
             package/tyfza1-pon-control \
             package/luci-app-tyfza1-pon \

@@ -11,8 +11,9 @@
 #      驱动源码 + 内核补丁 740 + config（rtw89 on / rtl_ax_ap off / NVMEM on）
 #      + DTS factory 校准 cell 绑定。rtw89 直读 factory 卷的 TYFC0003，
 #      绕开逆向驱动的 PE/TSSI/RFE50/symlink/284 字节一连串坑。
-#   3) 主题切换 argon -> design：直接拉库 0x676e67/luci-theme-design（锁 SHA），
-#      并删除厂商 PON 包里两个把默认主题抢回 argon 的 uci-defaults 脚本。
+#   3) 主题切换 argon -> design：用 kenzok8 feed 自带的 luci-theme-design
+#      （修 PKG_VERSION 让 apk 接受），并删除厂商 PON 包里两个把默认主题
+#      抢回 argon 的 uci-defaults 脚本。
 #   4) 修补上游包内脚本（fitblk 上限 + R10 面板端口命名），
 #      校准提取脚本 tyfza1-factory 仅供 PON/BOSA 使用，不再参与 WiFi。
 # ================================================================
@@ -39,7 +40,7 @@ PT1570_BOARD="$BOARD" ASSETS="$ASSETS" WRT="$WRT" DTS_STATUS="$DTS_STATUS" \
 # ---- 2. rtw89 官方 WiFi 驱动移植（必须在任何 make 之前：内核展开 files-6.18 要用）----
 ASSETS="$ASSETS" WRT="$WRT" bash "$ASSETS/scripts/overlay-rtw89.sh"
 
-# ---- 3. 主题切换：拉库 design + 移除厂商 argon 默认主题设置 ----
+# ---- 3. 主题切换：kenzok8 feed 的 design + 移除厂商 argon 默认主题设置 ----
 ASSETS="$ASSETS" WRT="$WRT" bash "$ASSETS/scripts/overlay-theme.sh"
 
 # ---- 4. 上游包内修补（fitblk 上限 / R10 端口命名）----

@@ -123,7 +123,7 @@ grep -q 'PROFILE="\${TARGET_MODEL' diy-part2.sh \
   && grep -q 'ALL_DEVICES=' diy-part2.sh \
   && ok "diy-part2 机型选择逻辑在位" || bad "diy-part2 缺机型选择逻辑"
 
-# 主题与软件包口径：design 主题（0x676e67 拉库），不含 argon/Fluent/tailscale/samba/upnp/wol
+# 主题与软件包口径：design 主题（kenzok8 feed 包），不含 argon/Fluent/tailscale/samba/upnp/wol
 grep -q '^CONFIG_PACKAGE_luci-theme-design=y$' "$CFG" \
   && ok "luci-theme-design=y（用户配置口径：默认主题 design）" \
   || bad "$CFG 缺 luci-theme-design"
@@ -159,13 +159,15 @@ done
     ! -path '*/etc/uci-defaults/*' -print -quit 2>/dev/null | grep -q . \
   && ok "files/ 无静态主题残留" || bad "files/ 残留主题注入文件（应删除）"
 
-# 主题拉库链路（diy-part1 -> overlay-theme.sh）：锁 SHA + 删 argon 两脚本 + 默认主题断言
+# 主题链路（diy-part1 -> overlay-theme.sh）：用 kenzok8 feed 的 design 包
 grep -q 'scripts/overlay-theme.sh' diy-part1.sh \
   && ok "diy-part1 接入 overlay-theme.sh" || bad "diy-part1 未调用 overlay-theme.sh"
-grep -q 'luci-theme-design' scripts/overlay-theme.sh \
-  && grep -q '5cea733806ccaf17fd63790d171bb2b65f29f8bd' scripts/overlay-theme.sh \
-  && ok "overlay-theme.sh 锁 design 仓库 + 固定 SHA（可复现）" \
-  || bad "overlay-theme.sh 未锁定 design 仓库/SHA"
+grep -q 'kenzok8/luci-theme-design' scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 使用 kenzok8 feed 的 design 包" \
+  || bad "overlay-theme.sh 未使用 kenzok8 feed 的 design 包"
+grep -q 'git clone\|git -C.*fetch' scripts/overlay-theme.sh \
+  && bad "overlay-theme.sh 仍有额外拉库逻辑（应直接用 feed 包）" \
+  || ok "overlay-theme.sh 无额外拉库（直接用 feed 包）"
 for s in 95-tyfza1-argon 97-tyfza1-argon-default; do
   grep -q "$s" scripts/overlay-theme.sh \
     && ok "overlay-theme.sh 删除厂商 $s" || bad "overlay-theme.sh 未删除 $s"
@@ -173,15 +175,10 @@ done
 grep -q '/luci-static/design' scripts/overlay-theme.sh \
   && ok "overlay-theme.sh 断言 design 默认主题脚本" \
   || bad "overlay-theme.sh 缺 design 默认主题断言"
-# 防止 kenzok8 feed 同名包顶掉拉库那份（CI 曾因此编译了 feeds 版而非拉库版）
-grep -q 'package/feeds/kenzok8/luci-theme-design' scripts/overlay-theme.sh \
-  && grep -q 'feeds/kenzok8/luci-theme-design' scripts/overlay-theme.sh \
-  && ok "overlay-theme.sh 清除 kenzok8 feed 同名 design 包" \
-  || bad "overlay-theme.sh 未清除 kenzok8 feed 同名包（会顶掉拉库版）"
 # PKG_VERSION 日期里的 '-' 会让 apk 报 package version is invalid（Error 99）
 grep -q 'PKG_VERSION:=' scripts/overlay-theme.sh \
   && grep -qE "s/\^\(PKG_VERSION" scripts/overlay-theme.sh \
-  && ok "overlay-theme.sh 修正 PKG_VERSION为 apk 合法格式" \
+  && ok "overlay-theme.sh 修正 PKG_VERSION 为 apk 合法格式" \
   || bad "overlay-theme.sh 未修正 PKG_VERSION（apk 会判非法版本 Error 99）"
 
 # ---------------------------------------------------------------

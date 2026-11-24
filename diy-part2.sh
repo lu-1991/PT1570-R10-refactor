@@ -138,12 +138,13 @@ if grep -qE "htmode='?[A-Z]+[0-9]+|channel='?[0-9]+" "$WIFI24"; then
 fi
 echo "✅ 2.4G 开机兜底脚本就位：$WIFI24"
 
-echo "---- [1d/7] 主题：design（拉库） ----"
-# diy-part1.sh 已调 overlay-theme.sh：拉库 luci-theme-design（锁 SHA）、
-# 删除厂商 PON 包里 95/97 两个 argon 默认主题脚本，design 自带 30 号脚本设默认。
+echo "---- [1d/7] 主题：design（kenzok8 feed） ----"
+# diy-part1.sh 已调 overlay-theme.sh：修 kenzok8 feed 的 luci-theme-design
+# 版本号（apk 合法）、删除厂商 PON 包里 95/97 两个 argon 默认主题脚本，
+# design 自带 30 号脚本设默认。
 grep -q '^CONFIG_PACKAGE_luci-theme-design=y$' .config \
   || echo "CONFIG_PACKAGE_luci-theme-design=y" >> .config
-echo "✅ 主题 design（0x676e67/luci-theme-design，直接拉库）；argon 已移除"
+echo "✅ 主题 design（kenzok8 feed 的 luci-theme-design）；argon 已移除"
 
 echo "---- [2/7] apk 源声明 ----"
 # ---- 2. apk 源声明 ----
@@ -281,7 +282,7 @@ for sym in tyfza1-pon-control luci-ssl uhttpd fitblk \
     || fail "$sym 在两次 defconfig 后被丢弃"
   echo "  OK   $sym"
 done
-# 主题口径：design（拉库编译）+ 包自带 30_luci-theme-design 设默认；
+# 主题口径：design（kenzok8 feed 包）+ 包自带 30_luci-theme-design 设默认；
 # argon 包与厂商 95/97 抢主题脚本已在 diy-part1 的 overlay-theme.sh 里清除。
 grep -q '^CONFIG_PACKAGE_luci-theme-design=y$' .config \
   || fail "CONFIG_PACKAGE_luci-theme-design 在两次 defconfig 后被丢弃"
