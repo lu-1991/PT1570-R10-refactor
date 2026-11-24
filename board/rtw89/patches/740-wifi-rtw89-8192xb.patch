@@ -161,16 +161,10 @@
  	struct rtw8852c_efuse *map;
  
  	map = (struct rtw8852c_efuse *)log_map;
-@@ -519,6 +521,19 @@ static int rtw8852c_read_efuse(struct rt
+@@ -519,6 +521,13 @@ static int rtw8852c_read_efuse(struct rt
  
  	rtw89_info(rtwdev, "chip rfe_type is %d\n", efuse->rfe_type);
  
-+	/* PT1570-R10: the efuse has no RFE value burned (reads back 255).
-+	 * The stock driver used CONFIG_WLAN0_RFE_TYPE_54 (RFE54/RTK66587_BPF)
-+	 * for this 5G front-end; pin it so the firmware RFE element and the
-+	 * antenna-diversity logic match the real hardware. */
-+	efuse->rfe_type = 54;
-+
 +	cal = rtw89_factory_cal_get(rtwdev, RTW89_FACTORY_RADIO_5G);
 +	if (cal) {
 +		rtw89_factory_fill_efuse(efuse, cal);

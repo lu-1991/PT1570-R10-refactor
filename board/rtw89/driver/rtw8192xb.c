@@ -418,11 +418,7 @@ static int rtw8192xb_read_efuse(struct rtw89_dev *rtwdev, u8 *log_map,
 	struct rtw89_factory_cal *cal;
 
 	ether_addr_copy(efuse->addr, map->mac_addr);
-	/* PT1570-R10: the efuse has no RFE value burned (reads back 0xff/255).
-	 * The stock driver used CONFIG_WLAN1_RFE_TYPE_50 for this 2.4G front-end
-	 * (RFE50/PON_2G); pin it here so the antenna-diversity logic and the
-	 * firmware RFE element selection see the real hardware type. */
-	efuse->rfe_type = 50;
+	efuse->rfe_type = map->rfe_type;
 	efuse->xtal_cap = map->xtal_k;
 	efuse->valid = is_valid_ether_addr(efuse->addr);
 

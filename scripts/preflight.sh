@@ -437,14 +437,21 @@ grep -q 'RTL8192XB' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
 ! grep -q '^--- a/drivers/net/wireless/realtek/rtw89/phy.c$' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
   && ok "740 补丁无 phy.c hunk（避免 context 失配 patch FAILED）" \
   || bad "740 补丁仍含 phy.c hunk（内核源码 context 差异会导致 patch FAILED）"
-# rfe_type 强制修正：efuse 未烧录（=255），按原厂 CONFIG_WLAN{0,1}_RFE_TYPE
-# 5G=RFE54 / 2.4G=RFE50 写死（官方驱动里 rfe_type 只影响天线分集与 RFE element）。
-grep -q 'efuse->rfe_type = 54;' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
-  && ok "740 补丁 5G 强制 rfe_type=54（原厂 WLAN0_RFE_TYPE_54）" \
-  || bad "740 补丁缺 5G rfe_type=54 强制修正"
-grep -q 'efuse->rfe_type = 50;' "$DRV/rtw8192xb.c" \
-  && ok "2.4G 驱动强制 rfe_type=50（原厂 WLAN1_RFE_TYPE_50）" \
-  || bad "$DRV/rtw8192xb.c 缺 2.4G rfe_type=50 强制修正"
+# rfe_type：严格照上游 fd909a3 原版，禁止任何强行写死。
+# 之前按逆向 WLAN{0,1}_RFE_TYPE 把 5G=54 / 2.4G=50 写进 efuse，是本机相对上游的
+# 唯一代码偏离；官方 rtw89 两块芯片 rfe_parms_conf=NULL，rfe_type 只影响天线分集，
+# 强行改只会偏离上游 firmware RFE element 选择。efuse 读回 255 属未烧录，上游原样处理。
+! grep -q 'efuse->rfe_type = 54;' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
+  && ok "740 补丁无 rfe_type 强制写死（与上游 fd909a3 一致）" \
+  || bad "740 补丁仍有 efuse->rfe_type=54（偏离上游，曾导致 probe -110）"
+! grep -q 'efuse->rfe_type = 50;' "$DRV/rtw8192xb.c" \
+  && ok "2.4G 驱动无 rfe_type 强制写死（与上游 fd909a3 一致）" \
+  || bad "$DRV/rtw8192xb.c 仍有 efuse->rfe_type=50（偏离上游）"
+# 固件必须是上游原版（md5 锁）：上游 fd909a3 的 8852c/8192xb 固件就是 0.27.112.0
+# 通用版；曾误换成原厂 rtl*-u2-ap.bin（0.27.84.3），那是 rtl_ax_ap 配套，非 rtw89。
+grep -q '77e2137956b17f91ea8ab58db6c80f98' scripts/overlay-rtw89.sh \
+  && ok "overlay-rtw89.sh 锁上游固件 md5（防误换 rtl_ax_ap 原厂固件）" \
+  || bad "overlay-rtw89.sh 未锁上游固件 md5"
 # 固件编内核（built-in rtw89/cfg80211 早期 probe 根因修复）：真机日志证实驱动
 # 依次请求 -2/-1/.bin、cfg80211 请求 regulatory.db，全在 rootfs 挂载前，缺一个就
 # sysfs fallback 卡 60s -> probe -22 无 WLAN。故 EXTRA_FIRMWARE 必须列全 6 个。

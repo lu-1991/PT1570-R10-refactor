@@ -86,6 +86,22 @@ echo "  驱动源码 $n 个文件已落地"
 # early probe 直接命中，不依赖 rootfs 挂载时序。
 # 5G 三个别名内容相同（固件只认 basename format 后缀），全部列出避免探测失败。
 # 注意：files/lib/firmware/ 那份仍保留（rootfs 里），供运行时重载兜底。
+# 固件必须是上游 fd909a3 原版（通用 0.27.112.0）。曾误换成 rtl_ax_ap 配套的
+# 原厂 rtl8852c-u2-ap.bin / rtl8192xb-u2-ap.bin（0.27.84.3）：那是另一套 FWDL
+# 协议，与 rtw89 不匹配。md5 锁防止再次被"照原厂固件"的直觉带偏。
+declare -A FW_MD5=(
+  [rtw8852c_fw-2.bin]='77e2137956b17f91ea8ab58db6c80f98'
+  [rtw8852c_fw-1.bin]='77e2137956b17f91ea8ab58db6c80f98'
+  [rtw8852c_fw.bin]='77e2137956b17f91ea8ab58db6c80f98'
+  [rtw8192xb_fw.bin]='3b4aae53a44010a4995460d41be9163b'
+)
+for fw in rtw8852c_fw-2.bin rtw8852c_fw-1.bin rtw8852c_fw.bin rtw8192xb_fw.bin; do
+  actual=$(md5sum "$FW_SRC/$fw" | awk '{print $1}')
+  [ "$actual" = "${FW_MD5[$fw]}" ] \
+    || fail "固件 $fw md5=$actual 非上游原版 ${FW_MD5[$fw]}（勿用 rtl_ax_ap 原厂固件）"
+done
+echo "  OK   4 个 WiFi 固件 md5 与上游 fd909a3 一致"
+
 mkdir -p "$FW_DST" "$REGDB_DST"
 fw_n=0
 for fw in rtw8852c_fw-2.bin rtw8852c_fw-1.bin rtw8852c_fw.bin rtw8192xb_fw.bin; do
