@@ -1,22 +1,22 @@
 #!/bin/bash
-# 把「新增机型支持」注入 lyq1996/rtl9617c-openwrt 源码树（只改 3 处，幂等）。
+# 把「PT1570-R10 机型支持」注入纯 refactor (Taurus) 源码树。幂等。
 #
 #   env PT1570_BOARD = r10（当前唯一支持的机型）
 #   env ASSETS       = 本资产目录（含 board/ scripts/）
 #   env WRT          = 源码树路径
 #   env DTS_STATUS   = experimental | verified
-#   env PT1570_ALLOW_H10 = 1 时才允许处理 h10（DORMANT，默认拒绝）
 #
-# 2026-11-09：按用户决定收窄为 R10-only。H10 资产保留但不参与构建，
-# 且 H10 DTS 没有真机数据支撑，默认必须拒绝，避免误产出不可刷固件。
+# 2026-11-25 重写：适配 d39cfc6 双基线废弃后的纯 refactor 树。
+#   * refactor 已自带 Taurus 平台驱动/LED/USB/PCIe；platform.sh 已用
+#     fit_do_upgrade，无需再注入升级流程或 H10 fip 钩子守护。
+#   * 本脚本只做 3 件事：注入 R10 DTS、注入 Device 定义、扩展 sysupgrade 白名单。
 #
 # 注入点：
-#   1. target/linux/rtl9617c/dts/<DTS>.dts          新增板级 DTS
-#   2. target/linux/rtl9617c/image/Makefile         在 BuildImage 之前插入 Device 定义
+#   1. target/linux/rtl9617c/dts/rtl9617c-pt1570-r10.dts   新增板级 DTS（新写，基于 rtk-taurus.dtsi）
+#   2. target/linux/rtl9617c/image/Makefile               在 BuildImage 之前插入 Device 定义
 #   3. target/linux/rtl9617c/base-files/lib/upgrade/platform.sh
-#                                                    platform_check_image 白名单加 board_name
-#                                                    + fit_do_upgrade 升级流程修复（3b）
-# 不改 board.d/02_network：LAN 接线由 files/etc/uci-defaults/99-pt1570-fit 兜底。
+#                                                         platform_check_image / platform_do_upgrade
+#                                                         白名单加 youhua,pt1570-r10
 
 set -euo pipefail
 
@@ -27,14 +27,6 @@ STATUS="${DTS_STATUS:-experimental}"
 
 case "$BOARD" in
   r10) PROFILE="youhua_pt1570_r10"; DTS="rtl9617c-pt1570-r10"; BOARD_NAME="youhua,pt1570-r10" ;;
-  h10)
-    if [ "${PT1570_ALLOW_H10:-0}" != "1" ]; then
-      echo "ERROR: PT1570-H10 已暂缓（DORMANT），当前范围是 R10-only。" >&2
-      echo "       该机型的 DTS 没有真机数据支撑，禁止产出固件。" >&2
-      echo "       确需恢复双机型：先完成 H10 真机采集，再设 PT1570_ALLOW_H10=1。" >&2
-      exit 1
-    fi
-    PROFILE="youhua_pt1570_h10"; DTS="rtl9617c-pt1570-h10"; BOARD_NAME="youhua,pt1570-h10" ;;
   *) echo "ERROR: PT1570_BOARD must be r10 (R10-only scope)" >&2; exit 1 ;;
 esac
 
@@ -46,6 +38,12 @@ PLATFORM="$WRT/target/linux/rtl9617c/base-files/lib/upgrade/platform.sh"
 for f in "$INC" "$DTS_SRC" "$IMG_MK" "$PLATFORM"; do
   test -f "$f" || { echo "ERROR: missing $f" >&2; exit 1; }
 done
+
+# ---- 0. 确认这是 refactor (Taurus) 树 ----
+grep -q '#include "rtk-taurus.dtsi"' "$DTS_SRC" \
+  || { echo "ERROR: R10 DTS 未基于 rtk-taurus.dtsi（纯 refactor 基线要求）" >&2; exit 1; }
+test -f "$WRT/target/linux/rtl9617c/dts/rtk-taurus.dtsi" \
+  || { echo "ERROR: 源码树缺 rtk-taurus.dtsi（不是 refactor Taurus 树？）" >&2; exit 1; }
 
 # ---- 1. DTS ----
 cp -v "$DTS_SRC" "$WRT/target/linux/rtl9617c/dts/${DTS}.dts"
@@ -74,164 +72,54 @@ else
   echo "Device/${PROFILE} already present, skip"
 fi
 
-# ---- 3. sysupgrade 白名单 ----
+# ---- 3. sysupgrade 白名单（check + upgrade 两处）----
+# refactor 的 platform.sh 用 case "$board" in ... 列出支持机型，两处 case
+# （platform_check_image / platform_do_upgrade）都要加入 R10。
 if ! grep -q "$BOARD_NAME" "$PLATFORM"; then
   python3 - "$PLATFORM" "$BOARD_NAME" <<'PY'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1])
 name = sys.argv[2]
 lines = p.read_text(encoding='utf-8').splitlines(keepends=True)
-for i, line in enumerate(lines):
-    # 不能写死 "pt1500-h10-2p5g) ;;"：第一个机型注入后该串就消失了，
-    # 同一源码树再注入第二个机型会失败。按「含锚点 + 以 ) ;; 收尾」定位。
-    if 'youhua,pt1500-h10-2p5g' in line and ') ;;' in line:
-        lines[i] = line.replace(') ;;', '|' + name + ') ;;', 1)
-        break
-else:
-    raise SystemExit('ERROR: platform.sh whitelist line not found; check upstream layout')
-p.write_text(''.join(lines), encoding='utf-8')
-print('platform_check_image whitelist extended with ' + name)
+out = []
+inserted = 0
+for line in lines:
+    out.append(line)
+    # 在每个机型 case 分支的 "tianyi,tyfza1-2p5g)" 行后插入 R10 分支。
+    # refactor platform.sh 里 check/do 两处各有一个这样的行。
+    if 'tianyi,tyfza1-2p5g)' in line:
+        indent = line[:len(line) - len(line.lstrip())]
+        out.append(f'{indent}{name} |\n')
+        inserted += 1
+if inserted == 0:
+    raise SystemExit('ERROR: platform.sh 里找不到 tianyi,tyfza1-2p5g) case 分支；上游布局变了？')
+p.write_text(''.join(out), encoding='utf-8')
+print(f'platform.sh whitelist extended with {name} ({inserted} case branches)')
 PY
 else
   echo "platform.sh already lists $BOARD_NAME, skip"
 fi
 
-# ---- 3b. sysupgrade 升级流程修复（上游 8c91b228b4 "release fitblk before sysupgrade"）----
-# 2026-11-16 朋友真机实证（对应其 run31 起系统内升级可用）：
-#   旧 platform.sh 用 nand_do_upgrade 硬编码写 UBI 卷，但运行中的 rootfs 正
-#   挂在该卷的 fitblk/ubiblock 设备上 —— 卷被占用，写入无效，表现为
-#   "系统里升级成功、重启后固件没有任何变化"。
-#   上游修复：platform_do_upgrade 改用 fit_do_upgrade（fitblk 包自带，
-#   会按 DTS chosen/rootdisk 自动定位 UBI 卷，并先 `fitblk /dev/fit0`
-#   释放块设备再升级），同时把 fitblk 工具复制进 sysupgrade 的 ramfs。
-if grep -q 'fit_do_upgrade "$1"' "$PLATFORM"; then
-  echo "platform.sh already uses fit_do_upgrade, skip"
-else
-  python3 - "$PLATFORM" <<'PY'
-import sys, pathlib
-p = pathlib.Path(sys.argv[1])
-text = p.read_text(encoding='utf-8')
-old_bin = "RAMFS_COPY_BIN='fw_printenv fw_setenv'\n"
-new_bin = "RAMFS_COPY_BIN='fw_printenv fw_setenv fitblk'\n"
-old_do = (
-    "platform_do_upgrade() {\n"
-    "\tCI_KERNPART=fit\n"
-    "\tCI_UBIPART=ubi_device\n"
-    "\tnand_do_upgrade \"$1\"\n"
-    "}\n"
-)
-new_do = (
-    "platform_do_upgrade() {\n"
-    "\tfit_do_upgrade \"$1\"\n"
-    "}\n"
-)
-for name, old, new in (("RAMFS_COPY_BIN", old_bin, new_bin),
-                       ("platform_do_upgrade", old_do, new_do)):
-    n = text.count(old)
-    if n != 1:
-        raise SystemExit(
-            f"ERROR: platform.sh 的 {name} 旧片段命中 {n} 次（应为 1）；"
-            "上游 20b4cf4 布局变了？请对照 8c91b228b4 手工核对")
-    text = text.replace(old, new, 1)
-p.write_text(text, encoding='utf-8')
-print('platform.sh upgraded to fit_do_upgrade flow')
-PY
-fi
-
-# ---- 3c. 挡住 H10 的升级钩子覆盖（网页升级报 "this image is for youhua,pt1500-h10"）----
-# 2026-11-16 真机实证：/sbin/sysupgrade 启动时 `ls /lib/upgrade/*.sh` 逐个 source。
-# pt1500-fip.sh 字母序在 platform.sh 之后，它无条件定义的
-#   platform_check_image / platform_do_upgrade / platform_copy_config
-# 会把 R10 的钩子整个覆盖掉：
-#   - check：只允许 youhua,pt1500-h10，R10 上传固件第一句就被判死
-#            （"this image is for youhua,pt1500-h10, not youhua,pt1570-r10"）
-#   - do：写 fip 卷，而 R10 上没有这个卷 → 即便 -F 强刷也写不进去
-# 所以 3b 修的 fit_do_upgrade 根本没机会执行。把这三个定义用机型 case 包起来，
-# 让 H10 机型仍然走 fip 路径、其它机型回落到 platform.sh。
-FIP_SH="$WRT/target/linux/rtl9617c/base-files/lib/upgrade/pt1500-fip.sh"
-if [ ! -f "$FIP_SH" ]; then
-  echo "pt1500-fip.sh 不存在，跳过（该树没有 H10 升级路径）"
-elif grep -q 'PT1570_R10_UPGRADE_HOOK_GUARD' "$FIP_SH"; then
-  echo "pt1500-fip.sh already guarded, skip"
-else
-  python3 - "$FIP_SH" <<'PY'
-import sys, pathlib
-p = pathlib.Path(sys.argv[1])
-lines = p.read_text(encoding='utf-8').splitlines()
-try:
-    start = next(i for i, l in enumerate(lines)
-                 if l.startswith('platform_check_image()'))
-except StopIteration:
-    raise SystemExit('ERROR: pt1500-fip.sh 里找不到 platform_check_image()，上游结构变了？')
-head, body = lines[:start], lines[start:]
-guard = [
-    '',
-    '# PT1570_R10_UPGRADE_HOOK_GUARD（PT1570-R10-CI 注入，勿手改）',
-    '# sysupgrade 会 source /lib/upgrade/*.sh 全部脚本，本文件字母序排在',
-    '# platform.sh 之后；不守护就会把 R10 的 platform_check_image /',
-    '# platform_do_upgrade 覆盖成 H10 的 fip 路径。仅在 H10 机型上生效。',
-    'case "$(board_name 2>/dev/null)" in',
-    'youhua,pt1500-h10|youhua,pt1500-h10-2p5g)',
-]
-out = head + guard + body + [';;', 'esac']
-p.write_text('\n'.join(out) + '\n', encoding='utf-8')
-print('pt1500-fip.sh 已加机型守护（%d 行函数体）' % len(body))
-PY
-fi
-
-# ---- 3e. 去掉默认 WAN（pon0.1101 + PPPoE + PON FE）----
-# 上游 90-tyfza1-pon-wan 会在首次开机写入 WAN：pon0.<wan_vlan>（默认 3961）
-# + PPPoE + 关闭 PON offload（照抄 PT1500 EPON 布局）。本机 files/ 原先还用
-# 95-pt1570-wan-default 覆盖成 R10 实测的 1101 + offload=1。
-# 按用户决定：彻底不要任何默认 WAN（三项全去），LAN/WiFi/时区等仍照常。
-# 做法：删上游 90 脚本 + 本机 95 脚本（95 已从 files/ 移除，无需在此处理），
-# 只在 R10 机型执行，PON 驱动本身保留（用户仍可自行配置 WAN）。
-if [ "$BOARD" = "r10" ]; then
-  UPSTREAM_WAN="$WRT/target/linux/rtl9617c/base-files/etc/uci-defaults/90-tyfza1-pon-wan"
-  if [ -f "$UPSTREAM_WAN" ]; then
-    rm -f "$UPSTREAM_WAN"
-    echo "removed upstream default WAN uci-default: 90-tyfza1-pon-wan"
-  fi
+# ---- 4. 去掉默认 WAN（pon0.<vlan> + PPPoE + 关 PON offload）----
+# refactor 的 PON 包来自外部 feed，默认 WAN 脚本在 feed 包内
+# （scripts/overlay-theme.sh 之后由 diy-part1 处理）。这里只处理 target 树内
+# 可能存在的旧脚本；新树 base-files/etc/uci-defaults 多数机型已不含它。
+UPSTREAM_WAN="$WRT/target/linux/rtl9617c/base-files/etc/uci-defaults/90-tyfza1-pon-wan"
+if [ -f "$UPSTREAM_WAN" ]; then
+  rm -f "$UPSTREAM_WAN"
+  echo "removed upstream default WAN uci-default: 90-tyfza1-pon-wan"
 fi
 
 # ---- 结果校验 ----
-# 出厂必须无默认 WAN：上游 90 脚本若仍在，首次开机又会写出 PPPoE WAN
-if [ "$BOARD" = "r10" ] && [ -f "$UPSTREAM_WAN" ]; then
-  echo "ERROR: 上游 90-tyfza1-pon-wan 未移除，出厂会有默认 WAN" >&2
-  exit 1
-fi
 grep -q "SUPPORTED_DEVICES += ${BOARD_NAME}" "$IMG_MK" \
-  || { echo "ERROR: SUPPORTED_DEVICES missing" >&2; exit 1; }
-grep -q "$BOARD_NAME" "$PLATFORM" \
-  || { echo "ERROR: platform.sh whitelist missing" >&2; exit 1; }
-# 升级流程必须是 fit_do_upgrade（否则系统内升级"成功"却写不进 UBI 卷）
+  || { echo "ERROR: SUPPORTED_DEVICES missing in image/Makefile" >&2; exit 1; }
+# platform.sh 两处 case 都要有 R10（check + upgrade），用出现次数 >=2 判定
+n_board=$(grep -c "$BOARD_NAME" "$PLATFORM")
+[ "$n_board" -ge 2 ] \
+  || { echo "ERROR: platform.sh 白名单 R10 出现 $n_board 次(<2)，check/upgrade 未都覆盖" >&2; exit 1; }
 grep -q 'fit_do_upgrade "$1"' "$PLATFORM" \
-  || { echo "ERROR: platform.sh 未启用 fit_do_upgrade（系统内升级会静默失败）" >&2; exit 1; }
-grep -q "fw_setenv fitblk" "$PLATFORM" \
-  || { echo "ERROR: platform.sh RAMFS_COPY_BIN 缺 fitblk" >&2; exit 1; }
-# H10 的 fip 钩子必须被机型 case 守护，否则会盖掉上面这套（网页升级必失败）
-if [ -f "$FIP_SH" ]; then
-  grep -q 'PT1570_R10_UPGRADE_HOOK_GUARD' "$FIP_SH" \
-    || { echo "ERROR: pt1500-fip.sh 未加机型守护（会覆盖 platform_check_image）" >&2; exit 1; }
-  sh -n "$FIP_SH" \
-    || { echo "ERROR: pt1500-fip.sh 加了守护后语法不通过" >&2; exit 1; }
-  echo "H10 fip 钩子已按机型守护 OK"
-fi
-grep -q 'rootdisk' "$WRT/target/linux/rtl9617c/dts/rtl9617c-tyfza1.dtsi" \
-  || { echo "ERROR: 上游 dtsi 没有 chosen.rootdisk，FIT ABI 不成立" >&2; exit 1; }
-grep -q 'volname = "fit"' "$WRT/target/linux/rtl9617c/dts/rtl9617c-tyfza1.dtsi" \
-  || { echo "ERROR: 上游 dtsi 没有 fit 卷" >&2; exit 1; }
-
-# R10 真机是 4×GE，DTS 必须基于上游 4GE 板定义；上游改名时提前失败而不是等到编译。
-if [ "$BOARD" = "r10" ]; then
-  DTS_DIR="$WRT/target/linux/rtl9617c/dts"
-  test -f "$DTS_DIR/rtl9617c-tyfza1-4ge.dts" \
-    || { echo "ERROR: 上游缺少 rtl9617c-tyfza1-4ge.dts（R10 的 4×GE 基线）" >&2; exit 1; }
-  grep -q 'rtl9617c-tyfza1-4ge.dts' "$DTS_DIR/$DTS.dts" \
-    || { echo "ERROR: R10 DTS 未 include 4GE 板定义" >&2; exit 1; }
-  ! grep -q 'rtl9617c-tyfza1-2p5g.dts' "$DTS_DIR/$DTS.dts" \
-    || { echo "ERROR: R10 DTS 误用 2.5G 板定义，4×GE 会不通" >&2; exit 1; }
-  echo "R10 4GE baseline OK"
-fi
+  || { echo "ERROR: platform.sh 未用 fit_do_upgrade（系统内升级会失败）" >&2; exit 1; }
+grep -q 'rootdisk' "$WRT/target/linux/rtl9617c/dts/rtk-taurus.dtsi" \
+  || echo "WARN: rtk-taurus.dtsi 无 rootdisk 属性（DTS 已自带 chosen.rootdisk，通常无碍）"
 
 echo "apply-board OK: board=$BOARD profile=$PROFILE dts=$DTS status=$STATUS"

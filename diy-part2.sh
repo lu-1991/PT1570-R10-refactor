@@ -16,7 +16,9 @@ ASSETS="${ASSETS:-$GITHUB_WORKSPACE}"
 
 # ---- 机型选择：来自 workflow_dispatch 的 target_model 输入 ----
 # 只编所选机型；其余机型在下面第 5 节统一关闭。
-ALL_DEVICES="youhua_pt1570_r10 tianyi_tyfza1_2p5g tianyi_tyfza1_4ge youhua_pt1500_h10_2p5g"
+# 2026-11-25 纯 refactor：上游 d39cfc6 只剩两个机型（pt1500-h10-2p5g /
+# tianyi-tyfza1-2p5g），4GE 板定义已被删除；加上我们注入的 R10 共三个。
+ALL_DEVICES="youhua_pt1570_r10 tianyi_tyfza1_2p5g youhua_pt1500_h10_2p5g"
 PROFILE="${TARGET_MODEL:-youhua_pt1570_r10}"
 case " $ALL_DEVICES " in
   *" $PROFILE "*) ;;
@@ -26,7 +28,6 @@ esac
 case "$PROFILE" in
   youhua_pt1570_r10)      MODEL_LABEL="PT1570-R10" ;;
   tianyi_tyfza1_2p5g)     MODEL_LABEL="TYFZA1-2.5G" ;;
-  tianyi_tyfza1_4ge)      MODEL_LABEL="TYFZA1-4GE" ;;
   youhua_pt1500_h10_2p5g) MODEL_LABEL="PT1500-H10" ;;
 esac
 WRT_IP="${WRT_IP:-192.168.1.1}"
@@ -223,9 +224,11 @@ sed -i 's|^CONFIG_PACKAGE_uboot-envtools=y|# CONFIG_PACKAGE_uboot-envtools is no
 
 make defconfig
 # defconfig 会丢掉未被 profile 显式点名的包；这里按本仓库配置口径重新断言。
-for sym in tyfza1-pon-control luci-ssl uhttpd fitblk \
+for sym in rtl9617c-pon-control luci-app-rtl9617c-pon luci-ssl uhttpd fitblk \
            luci-theme-design luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
-           wpad-mbedtls wifi-scripts iw wireless-regdb \
+           wpad-basic-mbedtls kmod-rtw89-8852ce rtl8852ce-ap-firmware \
+           kmod-rtw89-8192xbe rtl8192xbe-ap-firmware \
+           wifi-scripts iw wireless-regdb \
            kmod-usb3 kmod-usb-storage kmod-usb-storage-uas \
            kmod-fs-ext4 kmod-fs-vfat kmod-nls-utf8 kmod-gpio-button-hotplug \
            ucode-mod-math; do
@@ -272,9 +275,11 @@ else
     || fail "未勾 build_initramfs，但 initramfs 仍被启用（会多编一次内核）"
   echo "  OK   initramfs-recovery 已关闭"
 fi
-for sym in tyfza1-pon-control luci-ssl uhttpd fitblk \
+for sym in rtl9617c-pon-control luci-app-rtl9617c-pon luci-ssl uhttpd fitblk \
            luci-theme-design luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
-           wpad-mbedtls wifi-scripts iw wireless-regdb \
+           wpad-basic-mbedtls kmod-rtw89-8852ce rtl8852ce-ap-firmware \
+           kmod-rtw89-8192xbe rtl8192xbe-ap-firmware \
+           wifi-scripts iw wireless-regdb \
            kmod-usb3 kmod-usb-storage kmod-usb-storage-uas \
            kmod-fs-ext4 kmod-fs-vfat kmod-nls-utf8 kmod-gpio-button-hotplug \
            ucode-mod-math; do
@@ -324,24 +329,31 @@ echo "  OK   DTS + image/Makefile + platform.sh"
 
 # 空配置 defconfig 会把上游默认 target 的包写成显式 =y（污染源），反向断言
 for bad in kmod-mac80211 kmod-cfg80211 kmod-mt7915e kmod-mt76-core \
-           wpad-basic-mbedtls mt7981-wo-firmware eip197-mini-firmware; do
+           wpad-mbedtls mt7981-wo-firmware eip197-mini-firmware; do
   if grep -qE "^CONFIG_PACKAGE_${bad}=(y|m)$" .config; then
     fail "检测到污染包 ${bad}（默认 target 的包残留）"
   fi
 done
 echo "  OK   无 mediatek/openwrt_one 残留包"
 
-# rtw89 官方驱动核验（diy-part1 的 overlay-rtw89.sh 已落地）
-DST=target/linux/rtl9617c/files-6.18/drivers/net/wireless/realtek/rtw89
-[ -f "$DST/rtw89_factory.c" ] && [ -f "$DST/rtw8192xb.c" ] \
-  || fail "rtw89 驱动源码未落地（overlay-rtw89.sh 失败？）"
-grep -q '^CONFIG_RTW89_8192XBE=y$' target/linux/rtl9617c/config-6.18 \
-  || fail "config-6.18 缺 CONFIG_RTW89_8192XBE=y"
+# rtw89 核验（2026-11-25 纯 refactor 方案：上游 mac80211 backport + AP 固件包）
+# 上游 299da19 把 rtw89 从"内核内置源码"改为 kmod 包 + rtl*-ap-firmware 包，
+# 本仓库不再注入任何 rtw89 驱动源码；这里核验包符号与 DTS 校准链路。
+for sym in kmod-rtw89-8852ce rtl8852ce-ap-firmware \
+           kmod-rtw89-8192xbe rtl8192xbe-ap-firmware wpad-basic-mbedtls; do
+  grep -q "^CONFIG_PACKAGE_${sym}=y$" .config \
+    || fail "WiFi 配置缺 CONFIG_PACKAGE_${sym}=y（上游 299da19 方案）"
+done
 grep -q '^CONFIG_MTD_UBI_NVMEM=y$' target/linux/rtl9617c/config-6.18 \
   || fail "config-6.18 缺 CONFIG_MTD_UBI_NVMEM=y（factory 校准读不到）"
-grep -q 'wifi_cal_radio1' target/linux/rtl9617c/dts/rtl9617c-pt1570-r10.dts \
-  || fail "R10 DTS 未绑定 factory 校准 cell"
-echo "  OK   rtw89 官方驱动 + factory nvmem 校准链路"
+DTS=target/linux/rtl9617c/dts/rtl9617c-pt1570-r10.dts
+grep -q 'realtek,ap-firmware' "$DTS" \
+  || fail "R10 DTS 缺 realtek,ap-firmware（5G AP 固件不会被选用）"
+grep -q 'wifi_cal_radio0' "$DTS" && grep -q 'wifi_cal_radio1' "$DTS" \
+  || fail "R10 DTS 未绑定 factory 校准 cell（radio0/radio1）"
+grep -q '#include "rtk-taurus.dtsi"' "$DTS" \
+  || fail "R10 DTS 未基于 rtk-taurus.dtsi（纯 refactor 要求）"
+echo "  OK   rtw89 kmod + AP 固件包 + Taurus DTS 校准链路"
 
 echo "===== key config ====="
 grep -E '^CONFIG_TARGET_(BOARD|SUBTARGET)=' .config || true

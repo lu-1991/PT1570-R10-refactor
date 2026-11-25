@@ -10,19 +10,18 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: '上游基线 commit / 分支。默认 = refactor @ ae4aeac（用户指定基线）；硬件层会自动叠加 20b4cf4，一般不要改'
+        description: '上游基线 commit / 分支。默认 = refactor @ d39cfc6（纯 refactor 单基线，无硬件层叠加），一般不要改'
         required: false
-        default: 'ae4aeac45a70be1bdf68af65cbbacb360f201b27'
+        default: 'd39cfc6367e3f9226f1e0590aec7f6206f784047'
         type: string
       target_model:
-        description: '选择要编译的机型（只产出所选机型的固件）。youhua_pt1570_r10=友华 PT1570-R10(默认/真机已验证)；tianyi_tyfza1_2p5g=天邑 TYFZA1 2.5G；tianyi_tyfza1_4ge=天邑 TYFZA1 4GE；youhua_pt1500_h10_2p5g=友华 PT1500-H10 2.5G（这三个为上游机型，未在本仓库真机验证）'
+        description: '选择要编译的机型（只产出所选机型的固件）。youhua_pt1570_r10=友华 PT1570-R10(默认/真机验证目标)；tianyi_tyfza1_2p5g / youhua_pt1500_h10_2p5g=上游机型(未在本仓库真机验证)'
         required: false
         default: 'youhua_pt1570_r10'
         type: choice
         options:
           - youhua_pt1570_r10
           - tianyi_tyfza1_2p5g
-          - tianyi_tyfza1_4ge
           - youhua_pt1500_h10_2p5g
       upload_release:
         description: '发布到 GitHub Release（固定 tag pt1570-r10，滚动覆盖）'
@@ -52,20 +51,16 @@ env:
   FORCE_UNSAFE_CONFIGURE: 1
   BUILD_ROOT: /workdir
   REPO_URL: https://github.com/lyq1996/rtl9617c-openwrt.git
-  # ===== 双基线：refactor（用户指定基线）+ 20b4cf4（真机验证硬件层）=====
-  # SOURCE_REF = 克隆基线。用户要求用 refactor，锁 HEAD ae4aeac（2026-11-19）。
-  #   refactor 是 net 层 ni/fe 拆分的新代码线，但它删掉了 PCIe/WiFi/USB/LED
-  #   驱动与 4GE 板级 DTS，单独用它编不出 PT1570-R10 的完整固件。
-  # HARDWARE_REF = 硬件层来源。Clone 步骤会在 refactor 基线之上，把下列内容
-  #   覆盖为 20b4cf4（feature/pt1500-h10-openwrt-fixes HEAD，2026-11-07）：
-  #   target/linux/rtl9617c 整棵树 + PON/WiFi/LED/LuCI 包 + 工具修复。
-  #   这正是本仓库全部 CI 注入脚本（apply-board/patch-upstream/overlay-rtw89）
-  #   所依赖的源码形态：PON/4GE/LED 用硬件层，WiFi 则移植上游 rtw89 官方驱动。
-  # 两个都写完整 40 位 SHA：git fetch --depth=1 origin <SHA> 精确检出，字节级可复现；
-  # 用分支名会随上游前进而漂移，镜像内容与缓存 key（pt1570-tc-<SOURCE_HASH>-…）都会失效。
-  SOURCE_REF: ${{ github.event.inputs.source_ref || 'ae4aeac45a70be1bdf68af65cbbacb360f201b27' }}
-  HARDWARE_REF: '20b4cf4490ca55cc406d07e391691efa8cd8a087'
-  HW_BRANCH: 'feature/pt1500-h10-openwrt-fixes'
+  # ===== 纯 refactor 单基线（2026-11-25 起）=====
+  # SOURCE_REF = refactor @ d39cfc6（2026-11-25 HEAD）。不再叠加 20b4cf4 硬件层：
+  #   上游从 f75f4ca 起把平台驱动全部重写为 Taurus、删掉 rtl9617c compatibles
+  #   和 4GE 板级 DTS；硬件层那套 rtl9617c-* DTS 已无法在新驱动上工作。
+  #   本仓库改为直接跟 refactor 主线：R10 板级 DTS 由 board/dts 提供（基于
+  #   rtk-taurus.dtsi 重写），PON 包走外部 feed crysister/rtl9617c-packages，
+  #   WiFi 用上游 mac80211 backport + rtl*-ap-firmware 包（见 299da19）。
+  # 锁完整 40 位 SHA：git fetch --depth=1 origin <SHA> 精确检出，字节级可复现；
+  # 用分支名会随上游前进而漂移，镜像内容与缓存 key 都会失效。
+  SOURCE_REF: ${{ github.event.inputs.source_ref || 'd39cfc6367e3f9226f1e0590aec7f6206f784047' }}
   # 本次要编译的机型（workflow_dispatch 下拉选择，diy-part2/校验/Release 全跟随它）
   TARGET_MODEL: ${{ github.event.inputs.target_model || 'youhua_pt1570_r10' }}
   # 注意：必须用 inputs.*（布尔上下文）。github.event.inputs.* 是字符串，
@@ -139,7 +134,7 @@ jobs:
             python3 python3-docutils python3-pip python3-ply python3-pyelftools \
             qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
             uglifyjs unzip wget xmlto xxd zlib1g-dev zstd
-          # tyfza1-pon-control（Rust）交叉编译需要该 target std
+          # rtl9617c-pon-control（外部 feed，Rust）交叉编译需要该 target std
           if command -v rustup >/dev/null 2>&1; then
             rustup target add aarch64-unknown-linux-musl
           fi
@@ -152,57 +147,31 @@ jobs:
       # =========================================================
       # 2. 克隆上游源码
       # =========================================================
-      - name: Clone source code (refactor baseline + verified hardware layer)
+      - name: Clone source code (pure refactor / Taurus baseline)
         run: |
           set -e
           cd "$BUILD_ROOT"
 
-          # ---- [1/3] 基线：refactor（用户指定）----
+          # ---- 纯 refactor 单基线：refactor @ d39cfc6 ----
           git clone "$REPO_URL" --depth=1 openwrt
           cd openwrt
           if ! git fetch -q --depth=1 origin "$SOURCE_REF"; then
-            echo "::warning::按 refactor commit 拉取失败，回退 refactor 分支"
-            git fetch -q --depth=1 origin refactor
+            echo "::error::按 refactor commit $SOURCE_REF 拉取失败（纯 refactor 基线不可回退到旧的硬件层方案）"
+            exit 1
           fi
           git checkout -q FETCH_HEAD
           BASE_HASH="$(git rev-parse --short HEAD)"
           echo "baseline(refactor): $(git rev-parse HEAD)"
 
-          # ---- [2/3] 硬件层：20b4cf4（真机验证，refactor 删掉的驱动/4GE DTS 从这里补）----
-          if ! git fetch -q --depth=1 origin "$HARDWARE_REF"; then
-            echo "::warning::按硬件层 commit 拉取失败，回退 $HW_BRANCH"
-            git fetch -q --depth=1 origin "$HW_BRANCH"
-          fi
-          HW_REF="$(git rev-parse FETCH_HEAD)"
-          HW_HASH="$(git rev-parse --short FETCH_HEAD)"
-          echo "hardware layer: $(git rev-parse FETCH_HEAD)"
-
-          # 用已验证 commit 的整棵 target 树替换 refactor 的（net 层 ni/fe 拆分不进入），
-          # 保证驱动 / 内核 patch / dtsi 内部一致，与本仓库注入脚本的假设一致。
-          rm -rf target/linux/rtl9617c
-          git checkout -q "$HW_REF" -- target/linux/rtl9617c
-
-          # 补齐 PON / WiFi / LED / LuCI 包与工具修复（refactor 分支没有这些）。
-          # 不再 checkout argon 主题包：主题已改为 design，
-          # design 与主题设置页 luci-app-design-config 都由 scripts/overlay-theme.sh
-          # 拉库 ucode 版编译；该脚本同时清厂商 argon 包/默认主题/残留依赖。
-          git checkout -q "$HW_REF" -- \
-            package/tyfza1-pon-control \
-            package/luci-app-tyfza1-pon \
-            package/pt1500-storage \
-            tools/mtd-utils/Makefile \
-            package/network/config/wifi-scripts/files-ucode/lib/netifd/wireless/mac80211.sh \
-            package/network/config/wifi-scripts/files-ucode/usr/bin/iwinfo \
-            package/network/config/wifi-scripts/files-ucode/usr/share/ucode/iwinfo.uc
-
-          # 缓存 key 同时绑定基线与硬件层，任一变化都换 key，绝不拿旧缓存编新组合。
-          echo "SOURCE_HASH=${BASE_HASH}-${HW_HASH}" >> "$GITHUB_ENV"
+          # 缓存 key 绑定基线 SHA：上游一前进就换 key，绝不拿旧缓存编新组合。
+          echo "SOURCE_HASH=${BASE_HASH}" >> "$GITHUB_ENV"
           ln -sfn "$BUILD_ROOT/openwrt" "$GITHUB_WORKSPACE/openwrt"
 
+          # 断言这是 refactor Taurus 树（新平台的 DTS / 平台驱动名）
           test -f target/linux/rtl9617c/image/Makefile
-          test -f target/linux/rtl9617c/dts/rtl9617c-tyfza1.dtsi
-          test -f package/tyfza1-pon-control/Makefile
-          echo "source: baseline(refactor)=$BASE_HASH hardware=$HW_HASH"
+          test -f target/linux/rtl9617c/dts/rtk-taurus.dtsi
+          grep -q 'realtek,taurus' target/linux/rtl9617c/dts/rtk-taurus.dtsi
+          echo "source: pure-refactor baseline=$BASE_HASH (Taurus)"
 
       # =========================================================
       # 3. 缓存：dl（源码包）+ toolchain/host（工具链）+ ccache + feeds
@@ -344,63 +313,10 @@ jobs:
           cat "$GITHUB_WORKSPACE/configs/youhua_pt1570-r10.config" >> .config
           bash "$GITHUB_WORKSPACE/diy-part2.sh"
 
-      # rtw89 固件双链路校验（真机 TTL 日志定位）：
-      #  built-in rtw89/cfg80211 在 rootfs(fit0) 挂载前 372s 就 probe，固件在
-      #  rootfs 里读不到 -> 每个名字 sysfs fallback 卡 60s -> probe -22 无 WLAN。
-      #  A) 内核内置：board/rtw89/firmware/ 下 9 个文件，含 5G 探测序列
-      #     -2.bin/-1.bin/.bin 三个别名 + 2.4G + regulatory.db(.p7s) +
-      #     realtek/tyfza1/ 下三个原厂 NCTL 表。read_efuse 阶段也要
-      #     request_firmware NCTL，必须同样编进内核，early probe 直接命中。
-      #  B) rootfs 兜底：files/lib/firmware/rtw89/ 下 2 个，运行时重载可用。
-      - name: Verify rtw89 firmware (builtin + rootfs)
-        run: |
-          set -e
-          B="$GITHUB_WORKSPACE/board/rtw89/firmware"
-          for fw in rtw8852c_fw-2.bin rtw8852c_fw-1.bin rtw8852c_fw.bin rtw8192xb_fw.bin; do
-            [ -s "$B/$fw" ] || { echo "::error::缺内置固件 $fw"; exit 1; }
-            sz=$(stat -c %s "$B/$fw")
-            [ "$sz" -gt 100000 ] || { echo "::error::内置固件 $fw 大小异常 $sz"; exit 1; }
-          done
-          for fw in regulatory.db regulatory.db.p7s; do
-            [ -s "$B/$fw" ] || { echo "::error::缺内置 regdb $fw"; exit 1; }
-          done
-          N="$B/realtek/tyfza1"
-          for fw in array_mp_8852c_nctl_reg.bin array_mp_8852c_nctl_reg_a.bin \
-                    array_mp_8192xb_nctl_reg.bin; do
-            [ -s "$N/$fw" ] || { echo "::error::缺原厂 NCTL 表 $fw"; exit 1; }
-            sz=$(stat -c %s "$N/$fw")
-            [ "$sz" -gt 10000 ] || { echo "::error::原厂 NCTL 表 $fw 大小异常 $sz"; exit 1; }
-          done
-          for alias in rtw8852c_fw-2.bin rtw8852c_fw-1.bin; do
-            cmp -s "$B/$alias" "$B/rtw8852c_fw.bin" \
-              || { echo "::error::$alias 与 5G 固件内容不一致"; exit 1; }
-          done
-          T="$GITHUB_WORKSPACE/files/lib/firmware/rtw89"
-          for fw in rtw8192xb_fw.bin rtw8852c_fw.bin; do
-            [ -s "$T/$fw" ] || { echo "::error::缺 rtw89 固件 $fw"; exit 1; }
-            sz=$(stat -c %s "$T/$fw")
-            [ "$sz" -gt 100000 ] || { echo "::error::$fw 大小异常 $sz"; exit 1; }
-          done
-          # 确认内核 config 真的把 9 个固件都编进去了（overlay 已跑过）
-          CFG="/workdir/openwrt/target/linux/rtl9617c/config-6.18"
-          for fw in rtw89/rtw8852c_fw-2.bin rtw89/rtw8852c_fw-1.bin rtw89/rtw8852c_fw.bin \
-                    rtw89/rtw8192xb_fw.bin regulatory.db regulatory.db.p7s \
-                    realtek/tyfza1/array_mp_8852c_nctl_reg.bin \
-                    realtek/tyfza1/array_mp_8852c_nctl_reg_a.bin \
-                    realtek/tyfza1/array_mp_8192xb_nctl_reg.bin; do
-            grep -q "CONFIG_EXTRA_FIRMWARE=\".*$fw" "$CFG" \
-              || { echo "::error::config-6.18 的 EXTRA_FIRMWARE 缺 $fw"; exit 1; }
-          done
-          fwdir="/workdir/openwrt/target/linux/rtl9617c/files-6.18/firmware"
-          for fw in rtw89/rtw8852c_fw-2.bin rtw89/rtw8852c_fw-1.bin rtw89/rtw8852c_fw.bin \
-                    rtw89/rtw8192xb_fw.bin regulatory.db regulatory.db.p7s \
-                    realtek/tyfza1/array_mp_8852c_nctl_reg.bin \
-                    realtek/tyfza1/array_mp_8852c_nctl_reg_a.bin \
-                    realtek/tyfza1/array_mp_8192xb_nctl_reg.bin; do
-            [ -s "$fwdir/$fw" ] \
-              || { echo "::error::内核 files-6.18 缺 $fw（EXTRA_FIRMWARE 会编译失败）"; exit 1; }
-          done
-          echo "RTW89_FIRMWARE_OK=True (builtin 9 + rootfs 2, -2/-1.bin alias OK)"
+      # 2026-11-25 纯 refactor：WiFi 改为上游 mac80211 backport + kmod 包 +
+      # rtl8852ce-ap-firmware / rtl8192xbe-ap-firmware（见上游 299da19），
+      # 固件由包安装到 /lib/firmware/rtw89/，不再需要旧的"固件编进内核"链路。
+      # 包符号断言在 diy-part2.sh 的硬断言里做。
 
       - name: Run static preflight
         working-directory: ${{ github.workspace }}
@@ -437,32 +353,6 @@ jobs:
             echo "::group::BUILD FAILED - last 120 lines"
             tail -n 120 "$LOG"
             echo "::endgroup::"
-            # 诊断：dump CI 内核树里 rtw89/phy.c + core.c 的真实片段与 .rej，
-            # 用于定位 740 补丁 hunk 为何在此失败（本地 tarball 与 CI 源码差异）。
-            KDIR=$(find build_dir -maxdepth 2 -type d -name 'linux-6.18.*' 2>/dev/null | head -1)
-            if [ -n "$KDIR" ]; then
-              RTW="$KDIR/drivers/net/wireless/realtek/rtw89"
-              if [ -f "$RTW/core.c" ]; then
-                echo "::group::DIAG rtw89/core.c @CI"
-                grep -n 'static int rtw89_chip_efuse_info_setup' "$RTW/core.c" || true
-                echo "--- 6108-6132 行 ---"
-                sed -n '6108,6132p' "$RTW/core.c" | cat -n
-                echo "--- core.c.rej ---"
-                cat "$RTW/core.c.rej" 2>/dev/null || echo "(no rej)"
-                echo "::endgroup::"
-              fi
-              if [ -f "$RTW/phy.c" ]; then
-                echo "::group::DIAG rtw89/phy.c @CI"
-                grep -n 'static void rtw89_phy_init_rf_nctl' "$RTW/phy.c" || true
-                awk '/static void rtw89_phy_init_rf_nctl\(/{f=1} f{print NR": "$0} f&&/^}/{n++; if(n>=1) exit}' \
-                  "$RTW/phy.c" | head -30
-                echo "--- 1855-1875 行 ---"
-                sed -n '1855,1875p' "$RTW/phy.c" | cat -n
-                echo "--- phy.c.rej ---"
-                cat "$RTW/phy.c.rej" 2>/dev/null || echo "(no rej)"
-                echo "::endgroup::"
-              fi
-            fi
             grep -E 'Error [0-9]|^make(\[[0-9]+\])?: \*\*\*|error:|No such file|No space left|Killed|undefined reference' "$LOG" \
               | tail -n 8 | tr -d '\r' | while IFS= read -r l; do echo "::error::${l//%/%25}"; done
             exit 1
@@ -592,7 +482,7 @@ jobs:
             [ -f "$f" ] || continue
             case "$f" in
               *"${TARGET_MODEL}"*) continue ;;
-              *youhua_pt1570_r10*|*tianyi_tyfza1_2p5g*|*tianyi_tyfza1_4ge*|*youhua_pt1500_h10_2p5g*)
+              *youhua_pt1570_r10*|*tianyi_tyfza1_2p5g*|*youhua_pt1500_h10_2p5g*)
                 echo "drop 非所选机型($TARGET_MODEL)产物: $f"; rm -f -- "$f" ;;
             esac
           done
@@ -668,7 +558,7 @@ jobs:
           fi
           # 按机型固定 tag（滚动覆盖）：去掉厂商前缀、下划线转连字符
           # youhua_pt1570_r10 -> pt1570-r10 | tianyi_tyfza1_2p5g -> tyfza1-2p5g
-          # tianyi_tyfza1_4ge -> tyfza1-4ge  | youhua_pt1500_h10_2p5g -> pt1500-h10-2p5g
+          # youhua_pt1500_h10_2p5g -> pt1500-h10-2p5g
           RELEASE_TAG="${TARGET_MODEL#*_}"
           RELEASE_TAG="${RELEASE_TAG//_/-}"
           {
@@ -677,7 +567,7 @@ jobs:
             echo "| 项目 | 值 |"
             echo "|---|---|"
             echo "| 机型 | \`${TARGET_MODEL}\` |"
-            echo "| 源码 | lyq1996/rtl9617c-openwrt @ \`${SOURCE_HASH}\`（基线 refactor + 硬件层 20b4cf4） |"
+            echo "| 源码 | lyq1996/rtl9617c-openwrt @ \`${SOURCE_HASH}\`（纯 refactor / Taurus 单基线） |"
             echo "| 编译时间 | ${FW_TS:-$(date '+%Y-%m-%d %H:%M:%S')} (Shanghai) |"
             echo ""
             echo '```'

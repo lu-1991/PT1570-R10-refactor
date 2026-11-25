@@ -21,21 +21,13 @@ sec "1. 项目结构完整性"
 WF=$(find .github/workflows -maxdepth 1 -name '*.yml' -o -maxdepth 1 -name '*.yaml' 2>/dev/null | head -1)
 for f in diy-part1.sh diy-part2.sh \
          configs/youhua_pt1570-r10.config \
-         scripts/apply-board.sh scripts/overlay-rtw89.sh scripts/overlay-theme.sh \
+         scripts/apply-board.sh scripts/overlay-theme.sh \
          scripts/patch-upstream.sh scripts/verify-fit-boot.py \
          board/dts/rtl9617c-pt1570-r10.dts board/devices/pt1570-r10.mk.inc \
          files/etc/uci-defaults/96-pt1570-r10-leds \
          files/etc/uci-defaults/97-pt1570-r10-wifi24 \
          files/etc/uci-defaults/98-pt1570-r10-wifi-stability \
          files/etc/uci-defaults/99-pt1570-fit \
-         board/rtw89/driver/rtw89_factory.c \
-         board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
-         board/rtw89/firmware/rtw8192xb_fw.bin \
-         board/rtw89/firmware/rtw8852c_fw.bin \
-         board/rtw89/firmware/rtw8852c_fw-2.bin \
-         board/rtw89/firmware/rtw8852c_fw-1.bin \
-         board/rtw89/firmware/regulatory.db \
-         board/rtw89/firmware/regulatory.db.p7s \
          files/lib/firmware/rtw89/rtw8192xb_fw.bin \
          files/lib/firmware/rtw89/rtw8852c_fw.bin \
          files/etc/hotplug.d/ieee80211/10-wifi-detect \
@@ -108,9 +100,9 @@ t5="$T/rtl8852ce/tssi-thermal-5g.bin"
 sec "4. 机型配置关键符号"
 CFG=configs/youhua_pt1570-r10.config
 for sym in CONFIG_TARGET_rtl9617c=y CONFIG_PACKAGE_fitblk=y \
-           CONFIG_PACKAGE_tyfza1-pon-control=y CONFIG_PACKAGE_luci-ssl=y \
+           CONFIG_PACKAGE_rtl9617c-pon-control=y CONFIG_PACKAGE_luci-ssl=y \
            CONFIG_PACKAGE_uhttpd=y CONFIG_PACKAGE_luci=y \
-           CONFIG_PACKAGE_wpad-mbedtls=y CONFIG_LUCI_LANG_zh_Hans=y; do
+           CONFIG_PACKAGE_wpad-basic-mbedtls=y CONFIG_LUCI_LANG_zh_Hans=y; do
   grep -q "^${sym}$" "$CFG" && ok "$sym" || bad "$CFG 缺 $sym"
 done
 ! grep -q '^CONFIG_PACKAGE_uboot-envtools=y$' "$CFG" \
@@ -139,15 +131,16 @@ grep -q '^CONFIG_PACKAGE_luci-app-design-config=y$' "$CFG" \
 ! grep -qE '^CONFIG_PACKAGE_(tailscale|luci-app-samba4|vsftpd|luci-app-upnp|luci-app-wol)=y$' "$CFG" \
   && ok "未含 tailscale/samba/vsftpd/upnp/wol（用户配置口径）" \
   || bad "$CFG 含未约定的服务包（tailscale/samba/vsftpd/upnp/wol）"
-# 双频 WiFi / USB / LuCI 中文核心包断言（本仓库配置口径）
-# rtw89 为内核 built-in，无 kmod 包；逆向 kmod-rtl-ax-ap 已移除。
-for sym in CONFIG_PACKAGE_wpad-mbedtls=y CONFIG_PACKAGE_iw=y \
+# 双频 WiFi / USB / LuCI 中文核心包断言（纯 refactor 配置口径）
+# 2026-11-25：rtw89 改为 kmod 包 + AP 固件（上游 299da19）；wpad 用 basic-mbedtls。
+for sym in CONFIG_PACKAGE_wpad-basic-mbedtls=y CONFIG_PACKAGE_iw=y \
+           CONFIG_PACKAGE_kmod-rtw89-8852ce=y CONFIG_PACKAGE_kmod-rtw89-8192xbe=y \
            CONFIG_PACKAGE_kmod-usb-storage=y CONFIG_PACKAGE_ucode-mod-math=y \
            CONFIG_PACKAGE_luci-i18n-base-zh-cn=y; do
   grep -q "^${sym}$" "$CFG" && ok "$sym" || bad "$CFG 缺 $sym"
 done
 ! grep -q '^CONFIG_PACKAGE_kmod-rtl-ax-ap=y$' "$CFG" \
-  && ok "逆向 kmod-rtl-ax-ap 已移除（rtw89 为内核 built-in）" \
+  && ok "逆向 kmod-rtl-ax-ap 已移除" \
   || bad "$CFG 仍有 kmod-rtl-ax-ap（与 rtw89 抢 PCI 设备）"
 # 默认主题：design 由包自带 30_luci-theme-design 设定；argon/Fluent 抢主题脚本都不应有
 [ ! -f files/etc/uci-defaults/98-pt1570-fluent-default ] \
@@ -197,12 +190,12 @@ for s in 95-tyfza1-argon 97-tyfza1-argon-default; do
   grep -q "$s" scripts/overlay-theme.sh \
     && ok "overlay-theme.sh 删除厂商 $s" || bad "overlay-theme.sh 未删除 $s"
 done
-# apk install 阶段会因 PON 应用写死 argon 依赖而失败（no such package），
-# overlay-theme.sh 必须改写 PON Makefile 的 LUCI_DEPENDS，把 argon 两项摘掉。
-grep -q 'luci-app-tyfza1-pon/Makefile' scripts/overlay-theme.sh \
-  && grep -q '\+luci-i18n-argon-config-zh-cn' scripts/overlay-theme.sh \
-  && ok "overlay-theme.sh 清理 PON 应用 argon 依赖（apk install 防回归）" \
-  || bad "overlay-theme.sh 未清理 PON 应用 argon 依赖（apk install 会报 no such package）"
+# 2026-11-25 纯 refactor：PON 包换成外部 feed 的 luci-app-rtl9617c-pon，新包已
+# 解耦 argon；overlay-theme.sh 只做兜底清理（argon 包本体 + 抢主题脚本 + 依赖）。
+grep -q 'luci-app-rtl9617c-pon' scripts/overlay-theme.sh \
+  && grep -q 'rtl9617c-argon' scripts/overlay-theme.sh \
+  && ok "overlay-theme.sh 适配外部 feed PON 包（rtl9617c-pon + argon 兜底清理）" \
+  || bad "overlay-theme.sh 未适配 luci-app-rtl9617c-pon / argon 兜底"
 grep -q '/luci-static/design' scripts/overlay-theme.sh \
   && ok "overlay-theme.sh 断言 design 默认主题脚本" \
   || bad "overlay-theme.sh 缺 design 默认主题断言"
@@ -360,21 +353,21 @@ if [ -n "$WF" ] && [ -f "$WF" ]; then
     && ok "上游锁定为完整 40 位 SHA（字节级可复现）" \
     || bad "上游锁定不是完整 40 位 SHA，无法保证可复现"
 
-  # 双基线护栏（用户指定）：基线必须是 refactor，且必须保留 20b4cf4 硬件层叠加。
-  # 回归点：只 clone refactor 不叠加 -> 缺 WiFi/USB/LED/4GE 驱动，编出的固件残废；
-  #         改回纯 20b4cf4 -> 违背用户"用 refactor"的要求。
-  grep -qE "default: 'ae4aeac45a70be1bdf68af65cbbacb360f201b27'" "$WF" \
-    && ok "克隆基线为 refactor @ ae4aeac（用户指定）" \
-    || bad "克隆基线不是 refactor @ ae4aeac"
-  grep -q "HARDWARE_REF: '20b4cf4490ca55cc406d07e391691efa8cd8a087'" "$WF" \
-    && grep -q 'rm -rf target/linux/rtl9617c' "$WF" \
-    && grep -q 'git checkout -q "$HW_REF" -- target/linux/rtl9617c' "$WF" \
-    && grep -q 'git checkout -q "$HW_REF" -- \\' "$WF" \
-    && ok "保留 20b4cf4 硬件层叠加（target 整树 + 包）" \
-    || bad "缺 20b4cf4 硬件层叠加，refactor 单独编不出完整固件"
-  grep -q 'SOURCE_HASH=${BASE_HASH}-${HW_HASH}' "$WF" \
-    && ok "缓存 key 同时绑定基线与硬件层" \
-    || bad "缓存 key 未绑定双基线，换线后可能拿旧缓存编新组合"
+  # 纯 refactor 单基线护栏（2026-11-25 起）：基线必须是 d39cfc6，且不得再叠加
+  # 20b4cf4 硬件层（Taurus 驱动已不认旧 rtl9617c-* compatible，叠加会编译失败）。
+  grep -qE "default: 'd39cfc6367e3f9226f1e0590aec7f6206f784047'" "$WF" \
+    && ok "克隆基线为 refactor @ d39cfc6（纯 refactor 单基线）" \
+    || bad "克隆基线不是 refactor @ d39cfc6"
+  ! grep -q 'HARDWARE_REF:' "$WF" \
+    && ! grep -q 'rm -rf target/linux/rtl9617c' "$WF" \
+    && ok "已移除 20b4cf4 硬件层叠加（纯 refactor）" \
+    || bad "仍残留硬件层叠加逻辑（Taurus 树会冲突）"
+  grep -q 'rtk-taurus.dtsi' "$WF" \
+    && ok "Clone 断言为 Taurus 树（rtk-taurus.dtsi）" \
+    || bad "Clone 未断言 Taurus 树结构"
+  grep -q 'SOURCE_HASH=${BASE_HASH}' "$WF" \
+    && ok "缓存 key 绑定基线 SHA" \
+    || bad "缓存 key 未绑定基线 SHA"
 else
   bad "没有 workflow 可检查"
 fi
@@ -409,91 +402,42 @@ else
 fi
 
 # ---------------------------------------------------------------
-sec "6. rtw89 官方驱动资产完整性"
-DRV=board/rtw89/driver
-for f in rtw8192xb.c rtw8192xb.h rtw8192xb_table.c rtw8192xbe.c \
-         rtw89_factory.c rtw89_factory.h; do
-  [ -s "$DRV/$f" ] && ok "$f 在位" || bad "缺 rtw89 驱动文件 $f"
+sec "6. rtw89 WiFi（纯 refactor: mac80211 backport + AP 固件包）"
+# 2026-11-25：上游 299da19 把 rtw89 从"内核内置源码 + 740 补丁"改为
+# mac80211 backport 补丁(100-103) + kmod 包 + rtl*-ap-firmware 包。
+# 本仓库不再注入任何驱动源码/NCTL/固件内置；这里核验配置口径与 DTS 链路。
+for sym in kmod-rtw89-8852ce rtl8852ce-ap-firmware \
+           kmod-rtw89-8192xbe rtl8192xbe-ap-firmware wpad-basic-mbedtls; do
+  grep -q "^CONFIG_PACKAGE_${sym}=y$" configs/youhua_pt1570-r10.config \
+    && ok "config 启用 CONFIG_PACKAGE_${sym}=y" \
+    || bad "config 缺 CONFIG_PACKAGE_${sym}=y（上游 299da19 WiFi 方案）"
 done
-grep -q 'RTW89_FACTORY_MAGIC.*TYFC0003' "$DRV/rtw89_factory.c" \
-  && ok "rtw89 从 factory TYFC0003 读校准" || bad "rtw89_factory.c 无 TYFC0003 校准"
-grep -q 'PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x0192)' "$DRV/rtw8192xbe.c" \
-  && ok "8192XBE (0x0192) 2.4G 设备 ID 在位" || bad "8192XBE 设备 ID 缺失"
-grep -q 'RTL8192XB' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
-  && ok "740 补丁含 RTL8192XB 支持" || bad "740 补丁缺 RTL8192XB"
-# 板级 NCTL：恢复上游零差异后真机仍是 rfe_type=255 + c2h timeout / deadbeef，
-# 证明上游在 core_start 才做 NCTL 对这块板太晚。现按原厂 rtl_ax_ap 的
-# rf-start.h 1:1 移植到 rtw89_factory.c，并在两张卡 read_efuse 里
-# （固件下载后、首个 H2C 前）调用。旧 early NCTL 符号必须彻底消失。
-grep -q 'void rtw89_factory_nctl_start' "$DRV/rtw89_factory.c" \
-  && ok "rtw89_factory.c 实现原厂 NCTL 启动序列" \
-  || bad "rtw89_factory.c 缺 rtw89_factory_nctl_start"
-grep -q 'rtw89_factory_nctl_start(rtwdev);' "$DRV/rtw8192xb.c" \
-  && ok "2.4G read_efuse 调用原厂 NCTL" \
-  || bad "rtw8192xb.c 未在 read_efuse 调用原厂 NCTL"
-grep -q 'rtw89_factory_nctl_start(rtwdev);' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
-  && ok "5G read_efuse 调用原厂 NCTL" \
-  || bad "740 补丁未在 8852c read_efuse 调用原厂 NCTL"
-! grep -q 'rtw89_phy_init_rf_nctl_early' "$DRV/rtw89_factory.c" \
-    board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
-  && ok "无旧 early NCTL 残留（错误时机已弃用）" \
-  || bad "仍残留 rtw89_phy_init_rf_nctl_early"
-for fw in array_mp_8852c_nctl_reg.bin array_mp_8852c_nctl_reg_a.bin \
-          array_mp_8192xb_nctl_reg.bin; do
-  [ -s "board/rtw89/firmware/realtek/tyfza1/$fw" ] \
-    && ok "原厂 NCTL 表 $fw 在位" \
-    || bad "缺原厂 NCTL 表 board/rtw89/firmware/realtek/tyfza1/$fw"
-done
-for md5 in e20b3273736b3332e25b0678d6acb891 \
-           b8ce8294af3206b049ef3b9e549c7540 \
-           ed4267149a9d335aa5538edb63ae9045; do
-  grep -q "$md5" scripts/overlay-rtw89.sh \
-    && ok "overlay 锁原厂 NCTL 表 md5 ${md5:0:8}" \
-    || bad "overlay 未锁原厂 NCTL 表 md5 ${md5:0:8}"
-done
-! grep -q '^--- a/drivers/net/wireless/realtek/rtw89/phy.c$' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
-  && ok "740 补丁无 phy.c hunk（避免 context 失配 patch FAILED）" \
-  || bad "740 补丁仍含 phy.c hunk（内核源码 context 差异会导致 patch FAILED）"
-# rfe_type：严格照上游 fd909a3 原版，禁止任何强行写死。
-# 之前按逆向 WLAN{0,1}_RFE_TYPE 把 5G=54 / 2.4G=50 写进 efuse，是本机相对上游的
-# 唯一代码偏离；官方 rtw89 两块芯片 rfe_parms_conf=NULL，rfe_type 只影响天线分集，
-# 强行改只会偏离上游 firmware RFE element 选择。efuse 读回 255 属未烧录，上游原样处理。
-! grep -q 'efuse->rfe_type = 54;' board/rtw89/patches/740-wifi-rtw89-8192xb.patch \
-  && ok "740 补丁无 rfe_type 强制写死（与上游 fd909a3 一致）" \
-  || bad "740 补丁仍有 efuse->rfe_type=54（偏离上游，曾导致 probe -110）"
-! grep -q 'efuse->rfe_type = 50;' "$DRV/rtw8192xb.c" \
-  && ok "2.4G 驱动无 rfe_type 强制写死（与上游 fd909a3 一致）" \
-  || bad "$DRV/rtw8192xb.c 仍有 efuse->rfe_type=50（偏离上游）"
-# 固件必须是上游原版（md5 锁）：上游 fd909a3 的 8852c/8192xb 固件就是 0.27.112.0
-# 通用版；曾误换成原厂 rtl*-u2-ap.bin（0.27.84.3），那是 rtl_ax_ap 配套，非 rtw89。
-grep -q '77e2137956b17f91ea8ab58db6c80f98' scripts/overlay-rtw89.sh \
-  && ok "overlay-rtw89.sh 锁上游固件 md5（防误换 rtl_ax_ap 原厂固件）" \
-  || bad "overlay-rtw89.sh 未锁上游固件 md5"
-# 固件编内核（built-in rtw89/cfg80211 早期 probe 根因修复）：真机日志证实驱动
-# 依次请求 -2/-1/.bin、cfg80211 请求 regulatory.db，原厂 NCTL 表也在 read_efuse
-# 阶段请求，全在 rootfs 挂载前，缺一个就 sysfs fallback 卡 60s -> probe -110/-22。
-# 故 EXTRA_FIRMWARE 必须列全 9 个。
-for fw in rtw89/rtw8852c_fw-2.bin rtw89/rtw8852c_fw-1.bin rtw89/rtw8852c_fw.bin \
-          rtw89/rtw8192xb_fw.bin regulatory.db regulatory.db.p7s \
-          realtek/tyfza1/array_mp_8852c_nctl_reg.bin \
-          realtek/tyfza1/array_mp_8852c_nctl_reg_a.bin \
-          realtek/tyfza1/array_mp_8192xb_nctl_reg.bin; do
-  grep -q "CONFIG_EXTRA_FIRMWARE=\".*$fw" scripts/overlay-rtw89.sh \
-    && ok "overlay 内置固件 $fw (EXTRA_FIRMWARE)" \
-    || bad "overlay 的 EXTRA_FIRMWARE 缺 $fw（早期 fallback 60s 后 probe 失败）"
-done
-grep -q 'CONFIG_EXTRA_FIRMWARE_DIR="firmware"' scripts/overlay-rtw89.sh \
-  && ok "overlay 设 EXTRA_FIRMWARE_DIR=firmware" || bad "overlay 缺 EXTRA_FIRMWARE_DIR"
-for alias in rtw8852c_fw-2.bin rtw8852c_fw-1.bin; do
-  cmp -s "board/rtw89/firmware/$alias" board/rtw89/firmware/rtw8852c_fw.bin \
-    && ok "$alias 别名与 5G 固件内容一致" || bad "$alias 与 rtw8852c_fw.bin 不一致"
-done
-# 只查生效行（忽略注释）：config 里允许有"已移除"的说明文字，
-# 但任何未注释的 kmod-rtl-ax-ap=y 或 overlay 调用都必须消失。
+DTS=board/dts/rtl9617c-pt1570-r10.dts
+grep -q '#include "rtk-taurus.dtsi"' "$DTS" \
+  && ok "R10 DTS 基于 rtk-taurus.dtsi（纯 refactor）" \
+  || bad "R10 DTS 未基于 rtk-taurus.dtsi"
+grep -q 'realtek,ap-firmware' "$DTS" \
+  && ok "R10 DTS 5G 节点设 realtek,ap-firmware" \
+  || bad "R10 DTS 缺 realtek,ap-firmware（AP 固件不会被选用）"
+grep -q 'realtek,rfe-type = <54>' "$DTS" \
+  && ok "R10 DTS 设 RFE54（AP 固件表匹配）" \
+  || bad "R10 DTS 缺 realtek,rfe-type=54"
+grep -q 'wifi_cal_radio0' "$DTS" && grep -q 'wifi_cal_radio1' "$DTS" \
+  && ok "R10 DTS 绑定双频 factory 校准 cell" \
+  || bad "R10 DTS 未绑定 wifi_cal_radio0/1"
+grep -q 'label = "lan1"' "$DTS" && grep -q 'label = "lan4"' "$DTS" \
+  && ok "R10 DTS 端口按面板丝印命名（lan1..lan4）" \
+  || bad "R10 DTS 缺端口 label（Taurus NI 驱动靠它命名）"
+# 旧方案残留必须清干净
+[ ! -e scripts/overlay-rtw89.sh ] && [ ! -d board/rtw89 ] && [ ! -d board/wifi ] \
+  && ok "旧 rtw89 注入资产已移除（overlay-rtw89/board/rtw89/board/wifi）" \
+  || bad "仍残留旧 rtw89 注入资产（会与上游 backport 方案冲突）"
+! grep -qE 'bash .*overlay-rtw89\.sh|overlay-rtw89\.sh"' diy-part1.sh diy-part2.sh \
+  && ok "diy 不再调用 overlay-rtw89.sh" \
+  || bad "diy 仍调用 overlay-rtw89.sh"
 ! grep -qE '^[[:space:]]*CONFIG_PACKAGE_kmod-rtl-ax-ap=' configs/*.config \
-  && ok "构建链已无生效的 kmod-rtl-ax-ap" || bad "仍有生效的 kmod-rtl-ax-ap"
-! grep -q 'overlay-wifi-driver' diy-part1.sh diy-part2.sh \
-  && ok "diy 不再调用旧 overlay 脚本" || bad "diy 仍调用 overlay-wifi-driver.sh"
+  && ok "构建链无 kmod-rtl-ax-ap" \
+  || bad "仍有 kmod-rtl-ax-ap（与 rtw89 抢 PCI 设备）"
 
 # ---------------------------------------------------------------
 sec "7. factory 校准 284 字节（WiFi -EINVAL 的根因修复）"
@@ -510,10 +454,12 @@ grep -q '4096' scripts/patch-upstream.sh && {
 
 # ---------------------------------------------------------------
 sec "7b. R10 端口命名与面板灯（2026-11-14 真机逐口验证的接线修正）"
-grep -q 'of_machine_is_compatible("youhua,pt1570-r10")' scripts/patch-upstream.sh \
-  && grep -q 'index = 4 - port' scripts/patch-upstream.sh \
-  && ok "xram R10 命名修补在位（lan1..lan4=面板 LAN1..LAN4）" \
-  || bad "patch-upstream 缺 xram R10 命名修补"
+# 2026-11-25 纯 refactor：Taurus NI 驱动直接读 DTS 的 label 属性命名端口，
+# 不再需要旧的 xram "index = 4 - port" 内核补丁（上游已删该文件）。
+grep -q 'label = "lan1"' board/dts/rtl9617c-pt1570-r10.dts \
+  && grep -q 'label = "lan4"' board/dts/rtl9617c-pt1570-r10.dts \
+  && ok "R10 端口按 DTS label 命名（lan1..lan4=面板 LAN1..LAN4）" \
+  || bad "R10 DTS 缺端口 label（Taurus NI 驱动靠它命名）"
 test -f files/etc/uci-defaults/96-pt1570-r10-leds \
   && ok "R10 面板灯纠正脚本在位" || bad "缺 96-pt1570-r10-leds"
 # 默认 WAN 已按用户要求彻底去掉（pon0.1101 + PPPoE + PON FE 三项全无）：
@@ -528,25 +474,20 @@ grep -q '90-tyfza1-pon-wan' scripts/apply-board.sh \
   || bad "apply-board.sh 未删除上游 90-tyfza1-pon-wan（首次开机会冒出 PPPoE WAN）"
 
 # ---------------------------------------------------------------
-sec "7d. 系统内升级修复（上游 8c91b228b4：release fitblk before sysupgrade）"
-# 2026-11-16 朋友真机实证：旧流程 nand_do_upgrade 硬编码写 UBI 卷，但运行中的
-# rootfs 正挂在该卷的 fitblk 上，卷被占用 -> "系统里升级成功、重启无变化"。
-# 修复 = platform_do_upgrade 改 fit_do_upgrade + RAMFS 复制 fitblk 工具。
+sec "7d. 系统内升级（纯 refactor：platform.sh 已自带 fit_do_upgrade）"
+# 2026-11-25：refactor 的 platform.sh 已用 fit_do_upgrade + RAMFS_COPY_BIN 带
+# fitblk/fit_check_sign，本仓库 apply-board.sh 只需加 R10 机型白名单，不再注入
+# 升级流程，也没有 H10 pt1500-fip.sh 覆盖问题（上游已删该脚本）。
 grep -q 'fit_do_upgrade "$1"' scripts/apply-board.sh \
-  && grep -q "fw_setenv fitblk" scripts/apply-board.sh \
-  && ok "apply-board.sh 注入 fit_do_upgrade 升级流程（含 ramfs fitblk）" \
-  || bad "apply-board.sh 缺 fit_do_upgrade 升级流程注入"
-# 旧流程是否清除由 apply-board.sh 的收尾断言兜底（platform.sh 缺 fit_do_upgrade 直接失败）
+  && ok "apply-board.sh 仍断言 platform.sh 用 fit_do_upgrade" \
+  || bad "apply-board.sh 缺 fit_do_upgrade 断言（系统内升级会失败）"
+grep -q 'tianyi,tyfza1-2p5g)' scripts/apply-board.sh \
+  && grep -q 'youhua,pt1570-r10' scripts/apply-board.sh \
+  && ok "apply-board.sh 按 tianyi case 锚点注入 R10 白名单" \
+  || bad "apply-board.sh 未注入 platform.sh 白名单"
 grep -q '4xGE, UBI' board/dts/rtl9617c-pt1570-r10.dts \
   && ok "概览标记 UBI（区别于旧固件 FIT ABI，看型号即知升级是否生效）" \
   || bad "DTS model 缺 UBI 概览标记"
-# 2026-11-16 真机实证：sysupgrade 会 source /lib/upgrade/*.sh 全部脚本，
-# pt1500-fip.sh 字母序在 platform.sh 之后，会把 platform_check_image /
-# platform_do_upgrade 覆盖成 H10 的 fip 逻辑 -> 网页升级第一句就报
-# "this image is for youhua,pt1500-h10"。必须按机型 case 守护。
-grep -q 'PT1570_R10_UPGRADE_HOOK_GUARD' scripts/apply-board.sh \
-  && ok "apply-board.sh 注入 pt1500-fip.sh 机型守护（挡 H10 钩子覆盖）" \
-  || bad "apply-board.sh 缺 pt1500-fip.sh 机型守护注入"
 
 # ---------------------------------------------------------------
 sec "7e. WiFi 校准文件链路（2026-11-18：缺 symlink = probe -ENOENT 无线全灭）"

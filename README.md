@@ -6,10 +6,11 @@
 支持、驱动 overlay、rootfs 默认值和防回归断言；GitHub Actions 在 runner 上克隆上游源码、
 注入定制、编译、校验产物，最后发布到 Release。
 
-- 上游基座（**双基线**）：`lyq1996/rtl9617c-openwrt`
-  - **克隆基线 = `refactor`
-  - **硬件层 = `20b4cf4`**（分支 `feature/pt1500-h10-openwrt-fixes` HEAD，2026-11-07，
-    `pon: apply EPON queues per queue like stock`）——编译时在 refactor 之上叠加
+- 上游基座（**纯 refactor 单基线**）：`lyq1996/rtl9617c-openwrt`
+  - **克隆基线 = `refactor` @ `d39cfc6`**（2026-11-25 HEAD，Taurus 平台驱动线）
+  - 2026-11-25 起不再叠加 `20b4cf4` 硬件层：上游已把平台驱动重写为 Taurus 并删除
+    4GE 板级 DTS，R10 板级/4GE 端口/WiFi/PON 适配全部改为直接对 refactor 注入
+    （详见 §8「上游与致谢」）
 
 ---
 
@@ -19,16 +20,17 @@
 |---|---|
 | SoC | Realtek RTL9617C，4×ARM Cortex-A55，target `rtl9617c/generic`（`aarch64_cortex-a55`） |
 | 有线 | 4×GE（内部 GPHY 4 颗），面板标 LAN1–LAN4 |
-| 上行 | PON（`tyfza1-pon-control` 驱动；**无默认 WAN**，自行配置 VLAN/协议） |
-| 5G | RTL8852CE（PCIe0 → `phy0`），协议/信道由驱动能力推导（HE80 / auto），见 §6 |
-| 2.4G | RTL8192XBE（PCIe1 → `phy1`），协议/信道由驱动能力推导（HE20 / auto），见 §6 |
+| 上行 | PON（`rtl9617c-pon-control` 驱动，外部 feed；**无默认 WAN**，自行配置 VLAN/协议） |
+| 5G | RTL8852CE（PCIe0 → `phy0`），rtw89 mac80211 backport + AP 固件，协议/信道由驱动推导（HE80 / auto） |
+| 2.4G | RTL8192XBE（PCIe1 → `phy1`），同上方案（HE20 / auto） |
 | 存储 | SPI NAND + UBI 5 分区；rootfs 以 FIT 子镜像形式挂在 `/dev/fit0` |
 | 按键 | reset(gpio8)、rfkill(gpio99)、lights-toggle(gpio103) |
 | 灯 | 12 颗（internet / los / pon / phone / usb0 / usb1 / power / wps / lan0–3） |
 | factory 卷 | `0x1000` MAC、`0x2000` 5G 校准、`0x3000` 2.4G 校准、`0x4000` BOSA、`0x5000` PON A2H |
 
 > 面板接线（真机逐口插线确认）：芯片 NI `port0..3` **反序**对应面板 `LAN4..LAN1`。
-> 驱动命名已由 patch 修正为 `lan1..lan4` 对号入座，面板灯由 `96-pt1570-r10-leds` 纠正。
+> 2026-11-25 起：Taurus NI 驱动直接读 R10 DTS 的 `label="lan1".."lan4"` 命名端口
+> （不再用旧的 xram 内核补丁），面板灯由 `96-pt1570-r10-leds` 纠正。
 
 ---
 
@@ -44,7 +46,7 @@
 
    | 输入 | 默认 | 说明 |
    |---|---|---|
-   | `source_ref` | `ae4aeac…` | 克隆基线 commit / 分支。默认 = `refactor` @ `ae4aeac`（用户指定）；编译时会叠加 `20b4cf4` 硬件层（详见 §11「上游基座」） |
+   | `source_ref` | `d39cfc6…` | 克隆基线 commit / 分支。默认 = `refactor` @ `d39cfc6`（纯 refactor 单基线，无硬件层叠加，详见 §8） |
    | `target_model` | `youhua_pt1570_r10` | **选谁编谁**，只产出所选机型的固件 |
    | `upload_release` | `true` | 发布到固定 tag 的滚动 Release |
    | `prune_release` | `true` | 发布后删除该 Release 里不属于本次产物的旧附件（只留最新一套，见 §5.4） |
@@ -58,10 +60,11 @@
 
 | `target_model` | 机型 | Release tag | 状态 |
 |---|---|---|---|
-| `youhua_pt1570_r10` | 友华 PT1570-R10 | `pt1570-r10` | ✅ 本仓库真机验证 |
-| `tianyi_tyfza1_2p5g` | 天邑 TYFZA1 2.5G | `tyfza1-2p5g` | ⚠️ 上游机型，未验证 |
-| `tianyi_tyfza1_4ge` | 天邑 TYFZA1 4GE | `tyfza1-4ge` | ⚠️ 上游机型，未验证 |
-| `youhua_pt1500_h10_2p5g` | 友华 PT1500-H10 2.5G | `pt1500-h10-2p5g` | ⚠️ 上游机型，未验证 |
+| `youhua_pt1570_r10` | 友华 PT1570-R10 | `pt1570-r10` | ✅ 本仓库目标机型（2026-11-25 切纯 refactor 后待真机复验） |
+| `tianyi_tyfza1_2p5g` | 天邑 TYFZA1 2.5G | `tyfza1-2p5g` | ⚠️ 上游机型，未在本仓库验证 |
+| `youhua_pt1500_h10_2p5g` | 友华 PT1500-H10 2.5G | `pt1500-h10-2p5g` | ⚠️ 上游机型，未在本仓库验证 |
+
+> 注：上游 `d39cfc6` 已删除 `tianyi_tyfza1_4ge` 板级 DTS，故本仓库不再提供该机型。
 
 非 R10 机型不会带本仓库的面板灯纠正等 R10 专属逻辑 —— 这些只在 R10 上验证过，
 硬套会不适用，所以 `diy-part2.sh` 会主动删掉。默认 WAN 已彻底去掉，所有机型均不带。
@@ -129,17 +132,14 @@ checkout → CRLF 归一化 → 释放磁盘/装依赖 → 克隆上游(锁 comm
   会被 overlay 直接覆盖）。
 - **主题与软件包口径（按用户要求）**：本仓库只保留 PT1570-R10 核心功能 ——
   PON 拨号 + 4×GE + 双频 WiFi + LuCI 中文 + USB/存储 + LED/按键 + UTC+8。
-  主题已由 argon 换成 **design**（`luci-theme-design`，直接用 kenzok8 feed
-  `src-git kenzok8 .../openwrt-packages` 自带的那份，`scripts/feeds install -a`
-  安装；`diy-part1.sh` 调 `scripts/overlay-theme.sh` 把其 `PKG_VERSION` 的
-  日期 `-` 改成 `.` 以通过新版 apk 校验，不再另外 git 拉库）。
-  默认主题由包自带 `30_luci-theme-design` 设定。
-  厂商的 argon 残留已全部清除：① workflow 不再 checkout `luci-theme-argon` 包；
-  ② PON 包里的 `95-tyfza1-argon` / `97-tyfza1-argon-default` 由 overlay 脚本删除
-  （这两个脚本序号靠后，会抢走 design 的默认主题）；③ PON 应用 Makefile 的
-  `LUCI_DEPENDS` 写死了 `+luci-theme-argon +luci-i18n-argon-config-zh-cn`，
-  也由 `overlay-theme.sh` 摘除 —— 否则 argon 包删掉后 apk 在 `package/install`
-  阶段报 `no such package ... required by luci-app-tyfza1-pon` 而编译失败。
+  主题用 **design** 的 ucode 版：`diy-part1.sh` 调 `scripts/overlay-theme.sh`
+  从 `felixmm0606/luci-theme-design@ucode` 拉库（主线/kenzok8 那份是老 Lua 模板，
+  在 ucode LuCI 下报 `__entries nil` → 页面 500），连同设置页
+  `felixmm0606/luci-app-design-config@ucode` 一起编译。脚本修 `PKG_VERSION`
+  日期 `-`→`.` 以通过 apk 校验，默认主题由包自带 `30_luci-theme-design` 设定。
+  2026-11-25 起 PON 包换成外部 feed 的 `luci-app-rtl9617c-pon`，新包已解耦 argon
+  （不再硬依赖 argon 主题/中文包）；本仓库 config/Device 也都不选 `luci-theme-argon`，
+  `overlay-theme.sh` 只做兜底清理（删可能抢主题的 argon uci-defaults + 依赖）。
   未启用 tailscale / samba / vsftpd / upnp / wol —— 这些是定制项，
   需要时在 `configs/youhua_pt1570-r10.config` 里加 `CONFIG_PACKAGE_*` 即可
   （`diy-part2` 第 5/6 节会重新断言防丢包）。主题一律走包构建，不以静态文件注入 `files/`。
@@ -180,28 +180,26 @@ Release 是**滚动**语义（tag 固定，如 `pt1570-r10`），但产物文件
 ├── configs/
 │   └── youhua_pt1570-r10.config     # 机型无关的基础包集合（机型由 target_model 决定）
 ├── files/                           # 原样覆盖进 rootfs
-│   ├── etc/modules.d/50-rtl-ax-ap            # rtl_ax_ap 模块自动加载（ITB 移植，见 §6.1）
-│   ├── etc/hotplug.d/ieee80211/10-wifi-detect # 无线 add 后重跑 wifi config（ITB 移植）
-│   ├── etc/uci-defaults/92-pt1570-r10-wifi-default  # 双频首启 SSID/加密（ITB 移植，见 §6.1）
-│   ├── etc/uci-defaults/92-pt1570-r10-wireless-country # 默认 country=CN（ITB 移植）
-│   ├── etc/init.d/tyfza1-factory            # factory 校准提取（必须精确 284 字节）
-│   ├── etc/init.d/wifi-regdom               # 开机兜底 regdomain=CN（5G 必需，见 §6.2）
+│   ├── etc/hotplug.d/ieee80211/10-wifi-detect # 无线 add 后重跑 wifi config
+│   ├── etc/uci-defaults/92-pt1570-r10-wifi-default  # 双频首启 SSID/加密
+│   ├── etc/uci-defaults/92-pt1570-r10-wireless-country # 默认 country=CN
+│   ├── etc/init.d/tyfza1-factory            # factory 校准提取（PON/BOSA；284 字节）
+│   ├── etc/init.d/wifi-regdom               # 开机兜底 regdomain=CN
 │   ├── etc/uci-defaults/96-pt1570-r10-leds     # 面板灯 → 真实网口
-│   ├── etc/uci-defaults/97-pt1570-r10-wifi24   # 2.4G 首启兜底：country/启用/不隐藏（见 §6）
-│   ├── etc/uci-defaults/98-pt1570-r10-wifi-stability  # 断流缓解：不踢空闲终端 + country（见 FAQ）
+│   ├── etc/uci-defaults/97-pt1570-r10-wifi24   # 2.4G 首启兜底
+│   ├── etc/uci-defaults/98-pt1570-r10-wifi-stability  # 断流缓解
 │   ├── etc/uci-defaults/99-pt1570-fit          # 时区/主机名/FIT 接线兜底
-│   └── lib/firmware/realtek/tyfza1/            # ITB 全量 AP 固件 + 70 张射频表（含 RFE50/PON_2G/YH9570，见 §6.1）
-│   └── lib/firmware/regulatory.db(+.p7s)       # 带签名的无线法规库，5G 不广播的根因修复（见 §6.2）
+│   ├── lib/firmware/realtek/tyfza1/            # 遗留射频表/校准资产（AP 固件已改由包提供，见 §6.1）
+│   └── lib/firmware/regulatory.db(+.p7s)       # 带签名的无线法规库（5G 必需）
 ├── board/
-│   ├── dts/rtl9617c-pt1570-r10.dts  # 板级 DTS（root=/dev/fit0 自洽启动、按键修正）
-│   ├── devices/pt1570-r10.mk.inc    # image/Makefile 的 Device 定义片段
-│   └── wifi/rtl_ax_ap/              # 已真机验证的驱动全套（PE IRAM revert 版）
+│   ├── dts/rtl9617c-pt1570-r10.dts  # 板级 DTS（基于 rtk-taurus.dtsi 重写，Taurus compatible）
+│   └── devices/pt1570-r10.mk.inc    # image/Makefile 的 Device 定义片段（新 PON 包名 + rtw89 kmod）
 ├── scripts/
-│   ├── apply-board.sh               # 注入 DTS + Device + sysupgrade 白名单
-│   ├── overlay-wifi-driver.sh       # 整套替换驱动（含 pe-tx-code.h md5 强校验）
-│   ├── patch-upstream.sh            # 上游修补：factory 284 / fitblk 上限 / R10 端口命名
+│   ├── apply-board.sh               # 注入 DTS + Device + sysupgrade 白名单（Taurus 树）
+│   ├── overlay-theme.sh             # 拉库 ucode 版 design + 清 argon 残留（适配外部 feed PON 包）
+│   ├── patch-upstream.sh            # 上游修补：fitblk 4MiB 上限放开（kvmalloc）
 │   ├── preflight.sh                 # 静态自检，编译前跑，任何 FAIL 立即终止
-│   ├── verify-rf-tables.py          # 70 张表逐字段模拟驱动解析器（ITB 全量，见 §6.1）
+│   ├── verify-rf-tables.py          # 70 张表逐字段模拟驱动解析器
 │   └── verify-fit-boot.py           # 产物 FIT 结构 + bootargs 可启动性校验
 ├── .github/workflows/
 │   └── Build-PT1570-R10.yml         # 唯一 workflow（32 步）
@@ -227,44 +225,48 @@ Actions 日志里 `Restore toolchain & host tools cache` 是否显示 `Cache res
 
 ## 8. 上游与致谢
 
-### 上游基座（双基线：refactor 克隆 + 20b4cf4 硬件层）
+### 上游基座（纯 refactor 单基线 @ d39cfc6）
 
-按你的要求，**克隆基线用 `refactor`**。但 refactor 是 net 层 ni/fe 拆分的新代码线，
-它把 PCIe/WiFi/USB/LED 驱动和 4GE 板级 DTS 都删了——单独用它编不出 PT1570-R10 的完整固件
-（无 WiFi、无 USB、无面板灯、4GE 不通）。所以编译时在 refactor 基线之上**叠加**一套
-已真机验证的硬件层，两者各司其职：
+2026-11-25 起**只跟 `refactor` 主线**，不再叠加 `20b4cf4` 硬件层。
 
-| 角色 | 变量 | 锁定值 | 来源分支 | 作用 |
-|---|---|---|---|---|
-| 克隆基线 | `SOURCE_REF` | `ae4aeac45a70be1bdf68af65cbbacb360f201b27` | `refactor`（2026-11-19 HEAD） | 提供 net 层 ni/fe 拆分等主线代码 |
-| 硬件层 | `HARDWARE_REF` | `20b4cf4490ca55cc406d07e391691efa8cd8a087` | `feature/pt1500-h10-openwrt-fixes`（2026-11-07 HEAD） | 提供 PCIe/WiFi/USB/LED 驱动、4GE DTS、PON/LuCI 包 |
+| 项目 | 值 |
+|---|---|
+| 克隆基线 `SOURCE_REF` | `d39cfc6367e3f9226f1e0590aec7f6206f784047`（`refactor` 2026-11-25 HEAD） |
+| PON 包 | 外部 feed `crysister/rtl9617c-packages`（`rtl9617c-pon-control` / `luci-app-rtl9617c-pon`） |
+| WiFi | 上游 mac80211 backport 补丁(100-103) + `kmod-rtw89-8852ce` / `kmod-rtw89-8192xbe` + `rtl*-ap-firmware` 包 |
+| R10 板级 | 本仓库 `board/dts/rtl9617c-pt1570-r10.dts`（基于 `rtk-taurus.dtsi` 重写） |
 
-**叠加具体做什么**（workflow 的 Clone 步骤，早于 diy-part1）：
+**为什么放弃双基线**：上游 `f75f4ca` 把平台驱动全部重写为 Taurus、删掉
+`realtek,rtl9617c-*` compatible 与 4GE 板级 DTS。旧硬件层那套 `rtl9617c.dtsi` /
+`tyfza1-4ge.dts` 拷到 refactor 后，几百个 compatible 在 Taurus 内核里一个都匹配不到
+（串口/时钟/pinctrl/qspi/网口全废）——继续叠加只会编出起不来的固件。因此改为直接适配主线：
 
-1. `git clone --depth=1` 后 `checkout $SOURCE_REF`（refactor 基线）。
-2. `fetch $HARDWARE_REF`，用它的**整棵** `target/linux/rtl9617c` 替换 refactor 的
-   （`rm -rf` 再 `git checkout $HW_REF -- target/linux/rtl9617c`）——保证驱动、内核 patch、
-   dtsi 内部一致，net 层拆分不进入。
-3. 补齐 refactor 没有的包：`tyfza1-pon-control`、`luci-app-tyfza1-pon`、
-   `pt1500-storage`、`tools/mtd-utils/Makefile`、wifi-scripts 的 ucode 文件。
-   （argon 主题包已去掉，design 用 kenzok8 feed 自带的包，由 overlay-theme.sh 修版本号。）
-4. 之后 diy-part1/2 的全部注入逻辑原样运行（它们依赖的正是 20b4cf4 形态的源码树）。
+1. `git clone --depth=1` → `fetch $SOURCE_REF` → `checkout`（完整 40 位 SHA，字节级可复现）。
+2. `feeds update/install -a` 自动拉入 refactor `feeds.conf.default` 里新增的
+   `src-git rtl9617c .../rtl9617c-packages`（PON 包，含 git submodule 会自动初始化）。
+3. `diy-part1.sh` → `apply-board.sh` 注入 R10 DTS + Device + sysupgrade 白名单，
+   `overlay-theme.sh` 拉 ucode design 主题，`patch-upstream.sh` 放开 fitblk 4MiB 上限。
+4. `diy-part2.sh` 两次 defconfig + 硬断言（含 rtw89 kmod 包 / AP 固件 / DTS 校准链路）。
+5. 缓存 key `SOURCE_HASH=${BASE_HASH}` 绑定基线 SHA，上游前进就换 key。
+   `preflight.sh` 校验这套单基线配置没被改坏。
 
-这样 refactor 是名副其实的 git 基线，而真机验证过的驱动/修复一个不少。
-两个值都写完整 40 位 SHA、`git fetch --depth=1 origin <SHA>` 精确检出，字节级可复现；
-缓存 key `SOURCE_HASH=${BASE_HASH}-${HW_HASH}` 同时绑定两者，任一线前进都换 key，
-绝不拿旧缓存编新组合。`preflight.sh` 会校验这套双基线配置没被改坏。
+**与旧方案相比的好处**：跟上游主线同步（能持续吃到 net 层 HW offload / flowtable /
+内核安全更新）、PON 与 WiFi 都由官方包维护、端口命名直接走 DTS label（去掉脆弱的
+内核补丁）。**代价**：R10 的 DTS/WiFi/PON 链路是 2026-11-25 新适配的，**必须重新跑
+CI 编译 + 真机验证**（刷机前备好 U-Boot Web Failsafe / 串口）。
 
-**另两条线为什么单独都不行**：
+**有线/WiFi 关键适配点**（都在 `board/dts/rtl9617c-pt1570-r10.dts`）：
+- 4×GE：MDIO 下 `ethernet-phy@1..4`，NI `port0..3` → 面板 LAN4..LAN1，`label` 显式命名；
+- WiFi：pcie0 5G 设 `realtek,ap-firmware` + RFE54，pcie1 2.4G 设 RFE54，双频各绑
+  factory 卷的 `wifi_cal_radio0/1` nvmem cell；
+- 启动：`chosen.bootargs` 写死 `root=/dev/fit0` + `u-boot,version` 门闩（不依赖 bootloader
+  注入 root=），ubi_device 分区可写（rootfs_data overlay 必需）；
+- LED/按键：旧 `gpio0` 全局编号按 `bank=floor(n/32), pin=n%32` 换成 `gpio_bankN` 分组编号。
 
-| 分支 | HEAD | 说明 |
-|---|---|---|
-| `refactor` | `ae4aeac`（2026-11-19） | ✅ 克隆基线；但缺 WiFi/USB/LED/4GE 驱动，须叠加硬件层 |
-| `feature/pt1500-h10-openwrt-fixes` | `20b4cf4`（2026-11-07） | ✅ 硬件层来源，真机验证过 |
-| `main` | `cea9938`（2026-10-29） | 早已停更，缺 PON 队列修复，不用 |
-
-**分支前进后怎么办**：Clone 步骤在按 SHA 拉取失败时会回退到对应分支并打 `::warning::`。
-看到 warning 时先核对新提交，确认无回归再更新锁定值（同时要重跑真机验证）。
+> **遗留冗余**：`files/lib/firmware/realtek/tyfza1/` 下的旧 AP 固件/射频表是双基线时代
+> 手工塞的资产，新方案下 WiFi 固件由 `rtl*-ap-firmware` 包提供、这些文件不再被 WiFi
+> 驱动读取（PON/BOSA 校准仍依赖 `tyfza1-factory`）。保留它们不影响功能，仅占少量镜像
+> 空间；确认新方案真机稳定后可清理并同步删掉 preflight 第 3/7e/7f 节的对应断言。
 
 ### 致谢
 

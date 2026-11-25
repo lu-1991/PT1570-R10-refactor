@@ -18,13 +18,11 @@
 # 同一组 UCI 选项（系统 → Design Config）。kenzok8 feed 里的同名包是老 Lua CBI
 # （luasrc/ + luci-compat），必须清掉，否则顶替拉库版导致菜单/ACL 不生效。
 #
-# "去掉 argon 主题设置"的两处来源（厂商硬件层 20b4cf4）：
-#   1) workflow Clone 步骤原本 checkout 的 package/luci-theme-argon
-#      —— 已改为不 checkout，本脚本再做一次 rm -rf 兜底。
-#   2) luci-app-tyfza1-pon 包里的两个 uci-defaults 脚本：
-#        95-tyfza1-argon          迁移脚本：首次开机写 mediaurlbase=argon
-#        97-tyfza1-argon-default  每次开机强制写回 argon（序号 97 > 30，会抢主题）
-#      两个都必须删，否则 design 被 argon 抢回默认主题。
+# 2026-11-25 适配纯 refactor：PON 包换成外部 feed 的 luci-app-rtl9617c-pon，
+# 新包已解耦 argon（不再硬依赖 luci-theme-argon / argon 中文包，仅"若安装则
+# 自动套用"）。本仓库 Device 定义与 config 都不选 luci-theme-argon，所以它不会
+# 进固件。这里仍做两道兜底：清可能抢默认主题的 argon uci-defaults 脚本 + 清
+# package 顶层的 argon 包本体（feeds install 已跑完，只删包目录不影响其它包）。
 #
 # apk 版本号只认一个 '-rN' 作 revision；若 PKG_VERSION 里日期用 '-' 分隔
 # （5.8.0-20240106），拼上 -rN 会有两个 '-' 而报 version is invalid。
@@ -43,60 +41,55 @@ echo "=========================================="
 test -f "$WRT/package/base-files/files/bin/config_generate" \
   || { echo "ERROR: $WRT 不是 OpenWrt 源码根" >&2; exit 1; }
 
-# ---- 1. 去掉 argon 包本体（workflow 已不 checkout，这里兜底）----
+# ---- 1. 去掉 argon 包本体（兜底；本仓库 config/Device 都不选它）----
 rm -rf "$WRT/package/luci-theme-argon" \
        "$WRT/package/feeds/luci/luci-theme-argon" 2>/dev/null || true
-# feeds 软链可能指向外部（packages/luci feed 不含 argon，但保险起见清软链本身）
 find "$WRT/package/feeds" -maxdepth 2 -type l -name 'luci-theme-argon' -delete 2>/dev/null || true
-echo "  OK   argon 包本体已移除"
+echo "  OK   argon 包本体已移除（兜底）"
 
-# ---- 2. 去掉厂商 argon 默认主题设置（uci-defaults）----
-PON_UCID="$WRT/package/luci-app-tyfza1-pon/root/etc/uci-defaults"
-n_rm=0
-for s in 95-tyfza1-argon 97-tyfza1-argon-default; do
-  if [ -f "$PON_UCID/$s" ]; then
-    rm -f "$PON_UCID/$s"
-    n_rm=$((n_rm+1))
-    echo "  OK   已删除 $s"
-  fi
+# ---- 2. 清 PON 包里可能抢默认主题的 argon uci-defaults ----
+# 新包 luci-app-rtl9617c-pon 已解耦 argon，理论上没有这些脚本；这里按目录存在
+# 与否做兜底清理（外部 feed 路径 feeds/rtl9617c/luci-app-rtl9617c-pon）。
+PON_ROOT=""
+for d in "$WRT/feeds/rtl9617c/luci-app-rtl9617c-pon" \
+         "$WRT/package/feeds/rtl9617c/luci-app-rtl9617c-pon" \
+         "$WRT/package/luci-app-rtl9617c-pon"; do
+  [ -d "$d" ] && { PON_ROOT="$d"; break; }
 done
-# 收尾断言：源码树任何 uci-defaults 里都不允许再出现 argon 主题设置
-if grep -rqs -e '/luci-static/argon' -e 'luci\.themes\.Argon' \
-     "$WRT/package/luci-app-tyfza1-pon" 2>/dev/null; then
-  echo "ERROR: PON 包仍有 argon 默认主题设置（会抢走 design）" >&2
-  exit 1
+n_rm=0
+if [ -n "$PON_ROOT" ]; then
+  for s in 95-rtl9617c-argon 97-rtl9617c-argon-default \
+           95-tyfza1-argon 97-tyfza1-argon-default; do
+    f=$(find "$PON_ROOT" -type f -name "$s" 2>/dev/null | head -1)
+    if [ -n "$f" ]; then
+      rm -f "$f"
+      n_rm=$((n_rm+1))
+      echo "  OK   已删除 $(basename "$f")"
+    fi
+  done
+  # 若仍有脚本硬写 argon 默认主题，清掉（新包应无；纯兜底）
+  grep -rls -e '/luci-static/argon' -e 'luci\.themes\.Argon' \
+       "$PON_ROOT/root/etc/uci-defaults" 2>/dev/null | while IFS= read -r f; do
+    rm -f "$f"; echo "  OK   已删除抢 argon 主题脚本 $f"
+  done
+else
+  echo "  note 外部 feed PON 包目录未找到（feeds install 可能未装，通常无碍）"
 fi
-echo "  OK   厂商 argon 默认主题设置已清除（删除 $n_rm 个脚本）"
+echo "  OK   PON 包 argon 默认主题兜底清理完成（删除 $n_rm 个）"
 
-# ---- 2b. 去掉 PON 应用 Makefile 里的 argon 依赖 ----
-# 上游 package/luci-app-tyfza1-pon/Makefile 的 LUCI_DEPENDS 写死了：
-#   +luci-theme-argon +luci-i18n-argon-config-zh-cn
-# 本仓库已删 argon 包本体，apk 在 package/install 阶段解析依赖会报：
-#   luci-i18n-argon-config-zh-cn (no such package) / luci-theme-argon (no such package)
-#   required by: luci-app-tyfza1-pon-0.8.2_beta[...]
-# 这里把这两项从依赖串里摘掉（其余依赖原样保留），否则编译必挂在 install 阶段。
-PON_MK="$WRT/package/luci-app-tyfza1-pon/Makefile"
-test -f "$PON_MK" \
-  || { echo "ERROR: 缺 $PON_MK（workflow 未 checkout 硬件层 PON 包？）" >&2; exit 1; }
-if grep -qE '\+luci-theme-argon|\+luci-i18n-argon-config-zh-cn' "$PON_MK"; then
-  sed -i -E \
-    -e 's/[[:space:]]*\+luci-theme-argon//g' \
-    -e 's/[[:space:]]*\+luci-i18n-argon-config-zh-cn//g' \
-    "$PON_MK"
-  echo "  OK   PON Makefile 已去掉 argon 依赖：$(grep -E '^LUCI_DEPENDS:=' "$PON_MK" | head -1)"
+# ---- 2b. 去掉 PON 应用 Makefile 里的 argon 依赖（新包已解耦，兜底）----
+if [ -n "$PON_ROOT" ]; then
+  PON_MK="$PON_ROOT/Makefile"
+  if [ -f "$PON_MK" ] && grep -qE '\+luci-theme-argon|\+luci-i18n-argon-config-zh-cn' "$PON_MK"; then
+    sed -i -E \
+      -e 's/[[:space:]]*\+luci-theme-argon//g' \
+      -e 's/[[:space:]]*\+luci-i18n-argon-config-zh-cn//g' \
+      "$PON_MK"
+    echo "  OK   PON Makefile 兜底去掉 argon 依赖"
+  else
+    echo "  OK   PON Makefile 无 argon 依赖（新包已解耦）"
+  fi
 fi
-# 断言：PON 应用依赖里已无 argon（这是本次 apk install 失败的确切来源）
-if grep -qE '\+luci-theme-argon|\+luci-i18n-argon-config-zh-cn' "$PON_MK"; then
-  echo "ERROR: $PON_MK 仍依赖已删除的 argon 包，apk install 必失败" >&2
-  exit 1
-fi
-# 全树只做提示（不 fail）：feed 里可能有未被选中的 argon 相关包，属正常残留
-stale=$(grep -rlsE '(^|[[:space:]])[+?]?(luci-theme-argon|luci-i18n-argon-config-zh-cn)([[:space:]]|$)' \
-          --include='Makefile' "$WRT/package" 2>/dev/null | grep -vF "$PON_MK" | head -5 || true)
-if [ -n "$stale" ]; then
-  echo "  note 其余 Makefile 仍提到 argon（未被选中则无碍）：$(echo "$stale" | tr '\n' ' ')"
-fi
-echo "  OK   PON 应用 argon 依赖已清除"
 
 # ---- 3. 拉库：适配 ucode LuCI 的 design 主题 ----
 # 为什么不再用 kenzok8 feed 那份：主线 luci feed 已把主题模板从 Lua 迁到

@@ -5,17 +5,14 @@
 #
 # diy-part1 = 往源码树里"注入"，diy-part2 = 对 .config "定型"。
 #
-# 本脚本做四件事（全部幂等，重复执行安全）：
-#   1) 注入 PT1570-R10 板级支持（DTS + image/Makefile + sysupgrade 白名单）
-#   2) 移植上游官方 rtw89 驱动（替换逆向 rtl_ax_ap 方案）：
-#      驱动源码 + 内核补丁 740 + config（rtw89 on / rtl_ax_ap off / NVMEM on）
-#      + DTS factory 校准 cell 绑定。rtw89 直读 factory 卷的 TYFC0003，
-#      绕开逆向驱动的 PE/TSSI/RFE50/symlink/284 字节一连串坑。
-#   3) 主题切换 argon -> design：用 kenzok8 feed 自带的 luci-theme-design
-#      （修 PKG_VERSION 让 apk 接受），并删除厂商 PON 包里两个把默认主题
-#      抢回 argon 的 uci-defaults 脚本。
-#   4) 修补上游包内脚本（fitblk 上限 + R10 面板端口命名），
-#      校准提取脚本 tyfza1-factory 仅供 PON/BOSA 使用，不再参与 WiFi。
+# 2026-11-25 重写为纯 refactor (Taurus) 基线 d39cfc6：
+#   1) 注入 PT1570-R10 板级支持（新写 Taurus DTS + Device + sysupgrade 白名单）
+#   2) 主题切换 argon -> design（拉库 ucode 版 + 清厂商抢主题脚本）
+#   3) 修补 fitblk 4MiB 上限（刷入态 /dev/fit0 挂根必需）
+# 不再做：overlay-rtw89（上游已把 rtw89 改为 mac80211 backport + AP 固件包，
+#         由 config/diy-part2 的 kmod 包符号启用）、tyfza1-factory 284 字节修补
+#         （外部 feed 的 PON 包脚本不含该逻辑）、R10 xram 端口命名补丁
+#         （Taurus NI 驱动直接读 DTS label，端口名已在 DTS 里定好）。
 # ================================================================
 set -euo pipefail
 
@@ -25,7 +22,7 @@ BOARD="r10"          # R10-only，固定值
 DTS_STATUS="${DTS_STATUS:-verified}"
 
 echo "=========================================="
-echo "diy-part1: 注入 PT1570-R10 板级支持"
+echo "diy-part1: 注入 PT1570-R10 板级支持（纯 refactor / Taurus）"
 echo "  assets = $ASSETS"
 echo "  wrt    = $WRT"
 echo "=========================================="
@@ -37,13 +34,10 @@ test -f "$WRT/package/base-files/files/bin/config_generate" \
 PT1570_BOARD="$BOARD" ASSETS="$ASSETS" WRT="$WRT" DTS_STATUS="$DTS_STATUS" \
   bash "$ASSETS/scripts/apply-board.sh"
 
-# ---- 2. rtw89 官方 WiFi 驱动移植（必须在任何 make 之前：内核展开 files-6.18 要用）----
-ASSETS="$ASSETS" WRT="$WRT" bash "$ASSETS/scripts/overlay-rtw89.sh"
-
-# ---- 3. 主题切换：kenzok8 feed 的 design + 移除厂商 argon 默认主题设置 ----
+# ---- 2. 主题切换：拉库 ucode 版 design + 移除厂商 PON 包默认主题设置 ----
 ASSETS="$ASSETS" WRT="$WRT" bash "$ASSETS/scripts/overlay-theme.sh"
 
-# ---- 4. 上游包内修补（fitblk 上限 / R10 端口命名）----
+# ---- 3. fitblk 上限修补（fit_do_upgrade / /dev/fit0 挂根必需）----
 ASSETS="$ASSETS" WRT="$WRT" bash "$ASSETS/scripts/patch-upstream.sh"
 
 echo "🎉 diy-part1.sh 完成"
