@@ -422,6 +422,10 @@ grep -q 'realtek,ap-firmware' "$DTS" \
 grep -q 'realtek,rfe-type = <54>' "$DTS" \
   && ok "R10 DTS 设 RFE54（AP 固件表匹配）" \
   || bad "R10 DTS 缺 realtek,rfe-type=54"
+grep -q 'reset-gpios = <&gpio_bank3 5 GPIO_ACTIVE_LOW>' "$DTS" \
+  && grep -q 'reset-gpios = <&gpio_bank3 6 GPIO_ACTIVE_LOW>' "$DTS" \
+  && ok "R10 DTS 两路 PCIe PERST# 已配置（WiFi 卡可枚举）" \
+  || bad "R10 DTS 缺 PCIe PERST# reset-gpios（wlan 不会出现）"
 grep -q 'wifi_cal_radio0' "$DTS" && grep -q 'wifi_cal_radio1' "$DTS" \
   && ok "R10 DTS 绑定双频 factory 校准 cell" \
   || bad "R10 DTS 未绑定 wifi_cal_radio0/1"

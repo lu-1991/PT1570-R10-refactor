@@ -244,6 +244,9 @@
 };
 
 &pcie0 {
+	// 板载 8852CE 的 PERST#：不释放复位时链路停在 POLL_COMPLIANCE，
+	// 卡不会被枚举，也就没有 phy0/wlan0。上层 tianyi DTS 同样配置。
+	reset-gpios = <&gpio_bank3 5 GPIO_ACTIVE_LOW>;
 	status = "okay";
 };
 
@@ -262,6 +265,8 @@
 };
 
 &pcie1 {
+	// 板载 8192XBE 的 PERST#
+	reset-gpios = <&gpio_bank3 6 GPIO_ACTIVE_LOW>;
 	status = "okay";
 };
 

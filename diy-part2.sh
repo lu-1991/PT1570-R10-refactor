@@ -354,6 +354,9 @@ grep -q '^CONFIG_MTD_UBI_NVMEM=y$' target/linux/rtl9617c/config-6.18 \
 DTS=target/linux/rtl9617c/dts/rtl9617c-pt1570-r10.dts
 grep -q 'realtek,ap-firmware' "$DTS" \
   || fail "R10 DTS 缺 realtek,ap-firmware（5G AP 固件不会被选用）"
+grep -q 'reset-gpios = <&gpio_bank3 5 GPIO_ACTIVE_LOW>' "$DTS" \
+  && grep -q 'reset-gpios = <&gpio_bank3 6 GPIO_ACTIVE_LOW>' "$DTS" \
+  || fail "R10 DTS 缺 PCIe PERST# reset-gpios（WiFi 卡停在复位态，无 wlan）"
 grep -q 'wifi_cal_radio0' "$DTS" && grep -q 'wifi_cal_radio1' "$DTS" \
   || fail "R10 DTS 未绑定 factory 校准 cell（radio0/radio1）"
 grep -q '#include "rtk-taurus.dtsi"' "$DTS" \

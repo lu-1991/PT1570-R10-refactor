@@ -46,6 +46,12 @@ grep -q '#include "rtk-taurus.dtsi"' "$DTS_SRC" \
   || { echo "ERROR: R10 DTS 未基于 rtk-taurus.dtsi（纯 refactor 基线要求）" >&2; exit 1; }
 test -f "$WRT/target/linux/rtl9617c/dts/rtk-taurus.dtsi" \
   || { echo "ERROR: 源码树缺 rtk-taurus.dtsi（不是 refactor Taurus 树？）" >&2; exit 1; }
+# 两张板载 WiFi 卡的 PERST#：taurus-pcie 驱动 devm_gpiod_get_optional(dev,"reset")
+# 拿不到这行就永不释放复位，PCIe link down、没有 phy0/phy1、无线全灭。
+grep -q 'reset-gpios = <&gpio_bank3 5 GPIO_ACTIVE_LOW>' "$DTS_SRC" \
+  || { echo "ERROR: R10 DTS pcie0 缺 PERST# reset-gpios（5G 卡不会枚举）" >&2; exit 1; }
+grep -q 'reset-gpios = <&gpio_bank3 6 GPIO_ACTIVE_LOW>' "$DTS_SRC" \
+  || { echo "ERROR: R10 DTS pcie1 缺 PERST# reset-gpios（2.4G 卡不会枚举）" >&2; exit 1; }
 
 # ---- 1. DTS ----
 cp -v "$DTS_SRC" "$WRT/target/linux/rtl9617c/dts/${DTS}.dts"
