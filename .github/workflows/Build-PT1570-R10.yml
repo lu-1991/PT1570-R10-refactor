@@ -236,8 +236,9 @@ jobs:
         continue-on-error: true
         with:
           path: ${{ env.BUILD_ROOT }}/openwrt/feeds
-          key: pt1570-feeds-v2-${{ env.SOURCE_HASH }}
-          restore-keys: pt1570-feeds-v2-
+          # v3：v2 缓存里 omci/Cargo.lock 被旧版 *.lock 清理误删，必须丢弃重建
+          key: pt1570-feeds-v3-${{ env.SOURCE_HASH }}
+          restore-keys: pt1570-feeds-v3-
 
       # =========================================================
       # 4. feeds → diy-part1 → files → diy-part2
@@ -257,12 +258,28 @@ jobs:
           }
           # 缓存 restore 后的 .git 可能带 stale lock（Windows 同步/中断残留），
           # 先清掉，避免 update 误判 "Another git process is running" 而失败。
-          find feeds -type f \( -name '*.lock' -o -name 'FETCH_HEAD' \) -print -delete 2>/dev/null || true
+          # !! 必须限定在 .git/ 内部：外部 feed 的 rtl9617c-pon-control 子模块
+          #    带 omci/Cargo.lock（Rust 构建必需），旧写法 -name '*.lock' 会把它
+          #    一起删掉，编译期才在 cp ./omci/Cargo.lock 报 No such file（run #27）。
+          find feeds -type f -path '*/.git/*' \
+               \( -name '*.lock' -o -name 'FETCH_HEAD' \) -print -delete 2>/dev/null || true
           if ! ./scripts/feeds update -a; then
             feeds_rebuild || exit 1
           elif ! ./scripts/feeds install -a; then
             feeds_rebuild || exit 1
           fi
+          # PON 包是 Rust 子模块，Build/Prepare 会 cp omci/Cargo.lock。
+          # 缓存里的子模块文件可能被旧版本误删；在 feeds 阶段自愈，
+          # 不要等到几十分钟后的编译期才报 No such file。
+          PON_CTL="$BUILD_ROOT/openwrt/feeds/rtl9617c/rtl9617c-pon-control"
+          if [ -d "$PON_CTL" ] && [ ! -f "$PON_CTL/omci/Cargo.lock" ]; then
+            echo "::warning::PON control 缺 omci/Cargo.lock，尝试从子模块 git 恢复"
+            git -C "$PON_CTL" checkout -q -- omci/Cargo.lock 2>/dev/null \
+              || feeds_rebuild || exit 1
+          fi
+          test -f "$PON_CTL/omci/Cargo.lock" \
+            || { echo "::error::PON control 缺 omci/Cargo.lock（feeds 缓存损坏）"; exit 1; }
+          echo "PON_FEED_OK Cargo.lock=$(wc -c < "$PON_CTL/omci/Cargo.lock")B"
           # Windows/9p 同步过的 feed 权限必须收敛，rpcd 拒绝 world-writable handler
           chmod -R go-w feeds/luci feeds/packages 2>/dev/null || true
           find feeds/luci -path '*/root/usr/share/rpcd/ucode/*' -type f -exec chmod 0755 {} + 2>/dev/null || true
@@ -281,7 +298,7 @@ jobs:
         continue-on-error: true
         with:
           path: ${{ env.BUILD_ROOT }}/openwrt/feeds
-          key: pt1570-feeds-v2-${{ env.SOURCE_HASH }}
+          key: pt1570-feeds-v3-${{ env.SOURCE_HASH }}
 
       - name: Apply custom rootfs files
         run: |
