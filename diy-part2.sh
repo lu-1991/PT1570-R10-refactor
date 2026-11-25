@@ -253,7 +253,7 @@ sed -i 's|^CONFIG_PACKAGE_uboot-envtools=y|# CONFIG_PACKAGE_uboot-envtools is no
 
 make defconfig
 # defconfig 会丢掉未被 profile 显式点名的包；这里按本仓库配置口径重新断言。
-for sym in dropbear rtl9617c-pon-control luci-app-rtl9617c-pon luci-ssl uhttpd fitblk \
+for sym in rtl9617c-pon-control luci-app-rtl9617c-pon luci-ssl uhttpd fitblk \
            luci-theme-design luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
            wpad-basic-mbedtls kmod-rtw89-8852ce rtl8852ce-ap-firmware \
            kmod-rtw89-8192xbe rtl8192xbe-ap-firmware \
@@ -304,7 +304,7 @@ else
     || fail "未勾 build_initramfs，但 initramfs 仍被启用（会多编一次内核）"
   echo "  OK   initramfs-recovery 已关闭"
 fi
-for sym in dropbear rtl9617c-pon-control luci-app-rtl9617c-pon luci-ssl uhttpd fitblk \
+for sym in rtl9617c-pon-control luci-app-rtl9617c-pon luci-ssl uhttpd fitblk \
            luci-theme-design luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
            wpad-basic-mbedtls kmod-rtw89-8852ce rtl8852ce-ap-firmware \
            kmod-rtw89-8192xbe rtl8192xbe-ap-firmware \
