@@ -588,9 +588,18 @@ if [ -n "${WRT:-}" ] && [ -d "$WRT/target/linux/rtl9617c" ]; then
        "$WRT/target/linux/rtl9617c/base-files/lib/upgrade/platform.sh" \
     && ok "platform.sh 已升级为 fit_do_upgrade 流程" \
     || bad "platform.sh 仍是旧 nand_do_upgrade 流程（系统内升级会静默失败）"
-  grep -q "fw_setenv fitblk" \
-       "$WRT/target/linux/rtl9617c/base-files/lib/upgrade/platform.sh" \
-    && ok "RAMFS_COPY_BIN 已带 fitblk" || bad "RAMFS_COPY_BIN 缺 fitblk"
+  # 2026-11-25 纯 refactor：上游 platform.sh 已改成
+  #   RAMFS_COPY_BIN='fitblk fit_check_sign'
+  # 不再有旧基线的 "fw_setenv fitblk"。两种写法都认，避免把正常的上游
+  # 升级流程误判成失败（run #26 之后的下一处误报）。
+  if grep -qE "RAMFS_COPY_BIN=.*fitblk" \
+        "$WRT/target/linux/rtl9617c/base-files/lib/upgrade/platform.sh" \
+     || grep -q "fw_setenv fitblk" \
+        "$WRT/target/linux/rtl9617c/base-files/lib/upgrade/platform.sh"; then
+    ok "RAMFS_COPY_BIN 已带 fitblk"
+  else
+    bad "RAMFS_COPY_BIN 缺 fitblk（sysupgrade 阶段 /dev/fit0 建不出来）"
+  fi
   grep -q '^CONFIG_UIMAGE_FIT_BLK=y$' "$WRT/target/linux/rtl9617c/config-6.18" \
     && ok "UIMAGE_FIT_BLK=y" || bad "缺 UIMAGE_FIT_BLK（root=/dev/fit0 挂不上）"
   grep -q '^CONFIG_MTD_ROOTFS_ROOT_DEV=y$' "$WRT/target/linux/generic/config-6.18" \

@@ -327,8 +327,13 @@ test -f target/linux/rtl9617c/dts/rtl9617c-pt1570-r10.dts \
   || fail "DTS 缺失"
 echo "  OK   DTS + image/Makefile + platform.sh"
 
-# 空配置 defconfig 会把上游默认 target 的包写成显式 =y（污染源），反向断言
-for bad in kmod-mac80211 kmod-cfg80211 kmod-mt7915e kmod-mt76-core \
+# 空配置 defconfig 会把上游默认 target 的包写成显式 =y（污染源），反向断言。
+# 注意：kmod-mac80211 / kmod-cfg80211 不能放在这里 —— 2026-11-25 纯 refactor
+# 基线用上游 mac80211 backport，依赖链是
+#   kmod-rtw89-8852ce -> kmod-rtw89-pci -> kmod-rtw89 -> kmod-mac80211 -> kmod-cfg80211
+# （见 package/kernel/mac80211/realtek.mk 与 Makefile）。它们是本机型必需的
+# 正向依赖，run #26 曾因此误判"污染包"而在 diy-part2 挂掉。
+for bad in kmod-mt7915e kmod-mt76-core \
            wpad-mbedtls mt7981-wo-firmware eip197-mini-firmware; do
   if grep -qE "^CONFIG_PACKAGE_${bad}=(y|m)$" .config; then
     fail "检测到污染包 ${bad}（默认 target 的包残留）"
