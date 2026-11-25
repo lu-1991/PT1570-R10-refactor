@@ -16,6 +16,10 @@
 # ================================================================
 set -euo pipefail
 
+# 失败时给 GitHub 注解（run 页面顶部直接能看到是哪一行挂的），
+# 避免再出现"只有 exit code 1、日志里什么都没打"的静默失败。
+trap 'rc=$?; [ "$rc" -eq 0 ] || echo "::error::diy-part1 第 $LINENO 行失败 rc=$rc：$BASH_COMMAND" >&2' ERR
+
 ASSETS="${ASSETS:-$GITHUB_WORKSPACE}"
 WRT="${WRT:-$PWD}"
 BOARD="r10"          # R10-only，固定值

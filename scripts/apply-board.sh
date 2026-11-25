@@ -20,6 +20,8 @@
 
 set -euo pipefail
 
+trap 'rc=$?; [ "$rc" -eq 0 ] || echo "::error::apply-board 第 $LINENO 行失败 rc=$rc：$BASH_COMMAND" >&2' ERR
+
 BOARD="${PT1570_BOARD:-}"
 ASSETS="${ASSETS:-$(cd "$(dirname "$0")/.." && pwd)}"
 WRT="${WRT:-$ASSETS/wrt}"

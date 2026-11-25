@@ -30,6 +30,9 @@
 # ================================================================
 set -euo pipefail
 
+# 失败时给 GitHub 注解，避免静默 exit（pipefail + grep 那类坑看不见原因）
+trap 'rc=$?; [ "$rc" -eq 0 ] || echo "::error::overlay-theme 第 $LINENO 行失败 rc=$rc：$BASH_COMMAND" >&2' ERR
+
 ASSETS="${ASSETS:-$GITHUB_WORKSPACE}"
 WRT="${WRT:-$PWD}"
 
@@ -68,10 +71,17 @@ if [ -n "$PON_ROOT" ]; then
     fi
   done
   # 若仍有脚本硬写 argon 默认主题，清掉（新包应无；纯兜底）
-  grep -rls -e '/luci-static/argon' -e 'luci\.themes\.Argon' \
-       "$PON_ROOT/root/etc/uci-defaults" 2>/dev/null | while IFS= read -r f; do
+  # !! 这里必须用「进程替换 + || true」吞掉 grep 的退出码，不能写成
+  #    grep ... | while read：脚本开了 pipefail，"一个都没匹配到"时 grep 返回 1
+  #    -> 管道整体失败 -> set -e 当场终止脚本，日志里没有任何报错文本。
+  #    2026-11-25 run #25（job 139105043712）就是死在这一行：diy-part1 在
+  #    0 秒内静默 exit 1，run 页面只有一句 "Process completed with exit code 1"。
+  #    本地之所以复现不出来，是因为没装 feeds -> PON_ROOT 为空 -> 整段被跳过。
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
     rm -f "$f"; echo "  OK   已删除抢 argon 主题脚本 $f"
-  done
+  done < <(grep -rls -e '/luci-static/argon' -e 'luci\.themes\.Argon' \
+             "$PON_ROOT/root/etc/uci-defaults" 2>/dev/null || true)
 else
   echo "  note 外部 feed PON 包目录未找到（feeds install 可能未装，通常无碍）"
 fi
