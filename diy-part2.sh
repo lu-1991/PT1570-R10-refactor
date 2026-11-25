@@ -65,6 +65,35 @@ else
   echo "::warning::未找到 $CFG，跳过默认值修改"
 fi
 
+echo "---- [1a/7] 02_network: R10 板级 LAN/WAN ----"
+# 上游 02_network 只有 h10 / tianyi 两个 case，R10 会落到 *) 分支打印
+# "Unsupported hardware. Network interfaces not initialized" 并且不建桥，
+# 首次启动 /etc/config/network 里没有 br-lan(lan1-4)，LAN 口全废。
+NET="target/linux/rtl9617c/base-files/etc/board.d/02_network"
+if [ -f "$NET" ]; then
+  python3 - "$NET" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if 'youhua,pt1570-r10)' in src:
+    print("  OK   02_network 已含 R10 case")
+else:
+    needle = '\t*)\n\t\techo "Unsupported hardware. Network interfaces not initialized"\n'
+    if needle not in src:
+        sys.exit("ERROR: 02_network 默认分支锚点不存在（上游模板变了）")
+    ins = ('\tyouhua,pt1570-r10)\n'
+           '\t\tucidef_set_interfaces_lan_wan "lan1 lan2 lan3 lan4" "pon0"\n'
+           '\t\t;;\n')
+    src = src.replace(needle, ins + needle, 1)
+    open(path, "w", encoding="utf-8").write(src)
+    print("  OK   02_network 注入 R10 LAN/WAN case")
+PY
+  grep -q 'youhua,pt1570-r10)' "$NET" \
+    || fail "02_network R10 case 注入失败"
+else
+  fail "未找到 $NET（不是 rtl9617c 源码树？）"
+fi
+
 echo "---- [1b/7] 无线模板（SSID 分频段 / 首启启用） ----"
 # ---- 1b. 无线默认值：首启即启用 + 分频段 SSID ----
 # mac80211.uc 是 /etc/config/wireless 的生成器，必须改掉的行为：
