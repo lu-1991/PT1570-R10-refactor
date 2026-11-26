@@ -101,4 +101,59 @@ grep -q '#include <linux/vmalloc.h>' "$FITBLK_PATCH" \
 echo "FITBLK_LIMIT_OK=True (16384 pages = 64 MiB, kvmalloc)"
 fi
 
-echo "patch-upstream OK: fitblk 上限已放开"
+# ---------- RTL9617C NI：关闭 EEE/LPI（四口循环 Link Down/Up） ----------
+# 2026-11-26 真机：四个 GE 口在运行数分钟后开始反复 Link Down/Up，间隔逐渐
+# 缩短。refactor 的 NI 驱动在 phylink 能力里新增了：
+#   config->lpi_capabilities = MAC_100FD | MAC_1000FD;
+#   __set_bit(PHY_INTERFACE_MODE_INTERNAL/GMII, config->lpi_interfaces);
+#   config->lpi_timer_default = 250000;
+# GPHY 驱动同时用 vendor MMD 寄存器模拟 EEE ability/adv/LPABLE，于是 phylink
+# 判定双方支持 EEE 并打开 MAC TX LPI；与对端节能状态机不同步时会反复重新
+# 训练链路。这里从 MAC 能力声明层关掉 EEE，四个口全生效，不依赖 ethtool 包，
+# 也不用开机脚本去改运行时状态（那样时序很难卡在 phylink 之前）。
+# 只去掉能力声明，不碰 TX LPI 的 ethtool 接口，保留用户手动打开的余地。
+NI_PORT="$WRT/target/linux/rtl9617c/files-6.18/drivers/net/ethernet/realtek/rtl9617c/ni/ni_port.c"
+[ -f "$NI_PORT" ] || fail "找不到 $NI_PORT（上游 NI 驱动路径变了？）"
+
+if grep -q 'PT1570-R10.*EEE' "$NI_PORT"; then
+  echo "NI EEE/LPI 已禁用，跳过"
+else
+python3 - "$NI_PORT" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+text = p.read_text(encoding='utf-8')
+
+blocks = [
+    '\t\tconfig->lpi_capabilities = MAC_100FD | MAC_1000FD;\n',
+    '\t\t__set_bit(PHY_INTERFACE_MODE_INTERNAL, config->lpi_interfaces);\n',
+    '\t\t__set_bit(PHY_INTERFACE_MODE_GMII, config->lpi_interfaces);\n',
+    '\t\tconfig->lpi_timer_default = 250000;\n',
+]
+for b in blocks:
+    n = text.count(b)
+    if n != 1:
+        raise SystemExit('ERROR: ni_port.c 里 %r 出现 %d 次（期望 1 次，上游改动？）'
+                         % (b.strip(), n))
+
+replacement = (
+    '\t\t/* PT1570-R10: EEE/LPI disabled - 4xGE link flapping on refactor. */\n'
+    '\t\t/* lpi_capabilities / lpi_interfaces / lpi_timer_default removed. */\n'
+)
+# blocks[0] 原位换成注释，其余三行直接删掉。
+text = text.replace(blocks[0], replacement, 1)
+for b in blocks[1:]:
+    text = text.replace(b, '', 1)
+p.write_text(text, encoding='utf-8', newline='\n')
+print('patched ni_port.c: EEE/LPI capabilities removed (4xGE link flap)')
+PY
+fi
+
+! grep -q 'config->lpi_capabilities = MAC_100FD' "$NI_PORT" \
+  || fail 'ni_port.c 仍声明 lpi_capabilities（EEE 未关闭）'
+! grep -q 'config->lpi_interfaces' "$NI_PORT" \
+  || fail 'ni_port.c 仍声明 lpi_interfaces（EEE 未关闭）'
+grep -q 'PT1570-R10: EEE/LPI disabled' "$NI_PORT" \
+  || fail 'ni_port.c 缺少 EEE 禁用标记'
+echo "NI_EEE_DISABLED=True"
+
+echo "patch-upstream OK: fitblk 上限已放开, NI EEE/LPI 已关闭"

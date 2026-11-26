@@ -419,9 +419,17 @@ grep -q '#include "rtk-taurus.dtsi"' "$DTS" \
 grep -q 'realtek,ap-firmware' "$DTS" \
   && ok "R10 DTS 5G 节点设 realtek,ap-firmware" \
   || bad "R10 DTS 缺 realtek,ap-firmware（AP 固件不会被选用）"
-grep -q 'realtek,rfe-type = <54>' "$DTS" \
-  && ok "R10 DTS 设 RFE54（AP 固件表匹配）" \
-  || bad "R10 DTS 缺 realtek,rfe-type=54"
+# 2026-11-26 真机定位：双频 RFE 不对称，不能统一写 54。
+# 2.4G 是 PON_2G/iFEM 前端 -> 必须 RFE50；写 54 会走 eFEM GPIO 路径
+# （PAPE/TRSW/LNAON + GPIO12->ZERO），表现为 RX 正常（能扫到 AP）、
+# hostapd AP-ENABLED，但 TX 不发 -> 手机搜不到 SSID。
+# 5G 是 eFEM -> 保持 RFE54（已验证正常）。
+grep -q 'realtek,rfe-type = <50>' "$DTS" \
+  && ok "R10 DTS 2.4G 设 RFE50（PON_2G/iFEM，TX 前端匹配）" \
+  || bad "R10 DTS 2.4G 缺 realtek,rfe-type=50（写 54 会搜不到 2.4G）"
+[ "$(grep -c 'realtek,rfe-type = <54>' "$DTS")" -eq 1 ] \
+  && ok "R10 DTS 仅 5G 设 RFE54（未污染 2.4G）" \
+  || bad "R10 DTS RFE54 数量 != 1（2.4G 被误设 54 或 5G 丢失）"
 grep -q 'reset-gpios = <&gpio_bank3 5 GPIO_ACTIVE_LOW>' "$DTS" \
   && grep -q 'reset-gpios = <&gpio_bank3 6 GPIO_ACTIVE_LOW>' "$DTS" \
   && ok "R10 DTS 两路 PCIe PERST# 已配置（WiFi 卡可枚举）" \
@@ -623,6 +631,23 @@ if [ -n "${WRT:-}" ] && [ -d "$WRT/target/linux/rtl9617c" ]; then
 else
   echo "  SKIP 未指定 WRT（CI 中 workflow 会校验同样内容）"
 fi
+
+# ---------------------------------------------------------------
+sec "8. 真机回归修复（2026-11-26：EEE 关断 + 2.4G 默认值）"
+grep -q 'PT1570-R10: EEE/LPI disabled' scripts/patch-upstream.sh \
+  && grep -q 'NI_EEE_DISABLED=True' scripts/patch-upstream.sh \
+  && grep -q 'lpi_capabilities' scripts/patch-upstream.sh \
+  && ok "patch-upstream.sh 从 MAC 能力层关闭 EEE/LPI（四口 Link flap）" \
+  || bad "patch-upstream.sh 缺 EEE 关断（四口会继续 Link Down/Up）"
+grep -q 'NI_EEE_DISABLED=True' scripts/patch-upstream.sh \
+  && ok "patch-upstream.sh 有 EEE 关断自检断言" \
+  || bad "patch-upstream.sh 缺 EEE 关断自检"
+sh -n files/etc/init.d/wifi-regdom 2>/dev/null \
+  && ok "wifi-regdom 语法检查通过" || bad "wifi-regdom 语法错误"
+grep -q '2.4G channel .*-> 6' files/etc/init.d/wifi-regdom \
+  && grep -q 'htmode=.*HT20' files/etc/init.d/wifi-regdom \
+  && ok "wifi-regdom 含 2.4G channel=6 / htmode=HT20 默认值兜底" \
+  || bad "wifi-regdom 缺 2.4G 默认值兜底"
 
 # ---------------------------------------------------------------
 echo

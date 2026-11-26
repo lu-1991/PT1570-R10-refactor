@@ -271,11 +271,18 @@
 };
 
 &pcie1_port {
-	// 2.4 GHz RTL8192XBE.
+	// 2.4 GHz RTL8192XBE. RFE50 (iFEM), NOT RFE54 (eFEM).
+	// PT1570-R10's 2.4G front-end is the PON_2G / iFEM variant: the old
+	// working firmware loaded the RFE50/PON_2G calibration tables. RFE54
+	// makes rtw89 take the eFEM path (rtw8192xb_rfe_gpio(): PAPE/TRSW/LNAON
+	// routing plus GPIO12->ZERO) for a front-end the board does not have,
+	// so RX works (beacon scan OK) but TX never leaves the chip -> no SSID.
+	// realtek,rfe-type overrides the chip efuse, so the log's "RFE: 54"
+	// was this DTS value, not the hardware's real type.
 	wifi2g: wifi@0,0 {
 		compatible = "pci10ec,0192";
 		reg = <0x0000 0 0 0 0>;
-		realtek,rfe-type = <54>;
+		realtek,rfe-type = <50>;
 		nvmem-cells = <&wifi_cal_radio1>;
 		nvmem-cell-names = "wifi-calibration";
 	};

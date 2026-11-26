@@ -101,7 +101,7 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
 │   ├── etc/uci-defaults/92-pt1570-r10-wifi-default  # 双频首启 SSID/加密
 │   ├── etc/uci-defaults/92-pt1570-r10-wireless-country # 默认 country=CN
 │   ├── etc/init.d/tyfza1-factory            # factory 校准提取（PON/BOSA；284 字节）
-│   ├── etc/init.d/wifi-regdom               # 开机兜底 regdomain=CN + 2.4G 非法配置修正
+│   ├── etc/init.d/wifi-regdom               # 开机兜底 regdomain=CN + 2.4G channel=6/HT20
 │   ├── etc/uci-defaults/96-pt1570-r10-leds     # 面板灯 → 真实网口
 │   ├── etc/uci-defaults/97-pt1570-r10-wifi24   # 2.4G 首启兜底
 │   ├── etc/uci-defaults/98-pt1570-r10-wifi-stability  # 断流缓解
@@ -114,7 +114,7 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
 ├── scripts/
 │   ├── apply-board.sh               # 注入 DTS + Device + sysupgrade 白名单（Taurus 树）
 │   ├── overlay-theme.sh             # 拉库 ucode 版 design + 清 argon 残留（适配外部 feed PON 包）
-│   ├── patch-upstream.sh            # 上游修补：fitblk 4MiB 上限放开（kvmalloc）
+│   ├── patch-upstream.sh            # 上游修补：fitblk 4MiB 上限 + NI EEE/LPI 关闭
 │   ├── preflight.sh                 # 静态自检，编译前跑，任何 FAIL 立即终止
 │   ├── verify-rf-tables.py          # 70 张表逐字段模拟驱动解析器
 │   └── verify-fit-boot.py           # 产物 FIT 结构 + bootargs 可启动性校验
@@ -138,10 +138,19 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
 
 **有线/WiFi 关键适配点**（都在 `board/dts/rtl9617c-pt1570-r10.dts`）：
 - 4×GE：MDIO 下 `ethernet-phy@1..4`，NI `port0..3` → 面板 LAN4..LAN1，`label` 显式命名；
-- WiFi：pcie0 5G 设 `realtek,ap-firmware` + RFE54，pcie1 2.4G 设 RFE54，双频各绑
-  factory 卷的 `wifi_cal_radio0/1` nvmem cell；
-- 2.4G 兜底：`wifi-regdom` 每次开机检查 2.4G radio，只修正明显非法的 5G 残留
-  （channel>13 / HT80+ / 空 country），合法配置保持原样；
+- WiFi：pcie0 5G 设 `realtek,ap-firmware` + RFE54（eFEM，已验证正常），pcie1 2.4G
+  设 **RFE50**（PON_2G/iFEM）；双频各绑 factory 卷的 `wifi_cal_radio0/1` nvmem cell。
+  双频 RFE 不对称是 2026-11-26 真机定位的结果：2.4G 若照抄 tianyi 板的 RFE54，
+  驱动会走 eFEM GPIO 路径（PAPE/TRSW/LNAON）控制一块板上没有的前端，表现为
+  `hostapd AP-ENABLED`、能扫到周边 AP（RX 正常），但 beacon 发不出去、手机搜不到
+  SSID。`realtek,rfe-type` 会强制覆盖芯片 efuse，所以日志里的 `RFE: 54` 曾是 DTS
+  值而非硬件真实值；改成 50 后走 iFEM 路径，与旧可用固件的 `RFE50/PON_2G/` 表一致；
+- 2.4G 兜底：`wifi-regdom` 每次开机把 2.4G radio 的 channel 空/auto 落到 6、
+  htmode 空/auto 落到 HT20（历史注释里"手机搜不到改 HT20"的对策，真机已复验），
+  手动设定的合法值不动；空 country 补 CN；
+- 四口 Link flap：`patch-upstream.sh` 从 NI 驱动 MAC 能力层去掉
+  `lpi_capabilities` / `lpi_interfaces` / `lpi_timer_default`，关闭 EEE/LPI
+  （refactor 新引入，GPHY 用 vendor MMD 模拟 EEE，与对端节能状态机不同步会反复重训链路）；
 - 启动：`chosen.bootargs` 写死 `root=/dev/fit0` + `u-boot,version` 门闩（不依赖 bootloader
   注入 root=），ubi_device 分区可写（rootfs_data overlay 必需）；
 - 系统内升级：`apply-board.sh` 必须在 `platform.sh` 的 check/upgrade 两处都注入合法
