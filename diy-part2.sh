@@ -350,8 +350,13 @@ echo "  OK   UIMAGE_FIT_BLK + MTD_ROOTFS_ROOT_DEV"
 # 板级注入核验
 grep -q "SUPPORTED_DEVICES += youhua,pt1570-r10" target/linux/rtl9617c/image/Makefile \
   || fail "image/Makefile 缺少 SUPPORTED_DEVICES"
-grep -q "youhua,pt1570-r10" target/linux/rtl9617c/base-files/lib/upgrade/platform.sh \
-  || fail "platform.sh 白名单缺少 youhua,pt1570-r10"
+n_platform_board=$(grep -cE '^[[:space:]]*youhua,pt1570-r10\)$' \
+  target/linux/rtl9617c/base-files/lib/upgrade/platform.sh || true)
+[ "$n_platform_board" -eq 2 ] \
+  || fail "platform.sh 合法 R10 case 分支 $n_platform_board 处（应为 2：check + upgrade）"
+! grep -qE '^[[:space:]]*youhua,pt1570-r10[[:space:]]*\|' \
+  target/linux/rtl9617c/base-files/lib/upgrade/platform.sh \
+  || fail "platform.sh 存在 youhua,pt1570-r10 | 伪分支（Web 升级会失败）"
 test -f target/linux/rtl9617c/dts/rtl9617c-pt1570-r10.dts \
   || fail "DTS 缺失"
 echo "  OK   DTS + image/Makefile + platform.sh"

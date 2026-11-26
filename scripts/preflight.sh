@@ -485,10 +485,11 @@ sec "7d. 系统内升级（纯 refactor：platform.sh 已自带 fit_do_upgrade�
 grep -q 'fit_do_upgrade "$1"' scripts/apply-board.sh \
   && ok "apply-board.sh 仍断言 platform.sh 用 fit_do_upgrade" \
   || bad "apply-board.sh 缺 fit_do_upgrade 断言（系统内升级会失败）"
-grep -q 'tianyi,tyfza1-2p5g)' scripts/apply-board.sh \
-  && grep -q 'youhua,pt1570-r10' scripts/apply-board.sh \
-  && ok "apply-board.sh 按 tianyi case 锚点注入 R10 白名单" \
-  || bad "apply-board.sh 未注入 platform.sh 白名单"
+grep -qF 'tianyi,tyfza1-2p5g|\\' scripts/apply-board.sh \
+  && grep -qF 'youhua,pt1570-r10)' scripts/apply-board.sh \
+  && ! grep -qF "out.append(f'{indent}{name} |" scripts/apply-board.sh \
+  && ok "apply-board.sh 注入合法 R10 case 分支（check + upgrade）" \
+  || bad "apply-board.sh 未注入合法 platform.sh 白名单（旧写法会生成伪 case 分支）"
 grep -q '4xGE, UBI' board/dts/rtl9617c-pt1570-r10.dts \
   && ok "概览标记 UBI（区别于旧固件 FIT ABI，看型号即知升级是否生效）" \
   || bad "DTS model 缺 UBI 概览标记"
@@ -574,6 +575,11 @@ RDP=files/lib/firmware/regulatory.db.p7s
   && grep -q 'iw reg set CN' files/etc/init.d/wifi-regdom \
   && ok "wifi-regdom 开机脚本在位（regdomain CN 兜底）" \
   || bad "缺 wifi-regdom 开机脚本（regdomain 可能停在世界域）"
+grep -q 'config_foreach _normalize_24g_radio wifi-device' files/etc/init.d/wifi-regdom \
+  && grep -q 'wireless.$sec.channel=6' files/etc/init.d/wifi-regdom \
+  && grep -q 'wireless.$sec.htmode=HT20' files/etc/init.d/wifi-regdom \
+  && ok "wifi-regdom 含 2.4G 非法信道/带宽兜底" \
+  || bad "wifi-regdom 缺 2.4G 非法配置兜底（保留旧配置时可能无 2.4G 信号）"
 sh -n files/etc/init.d/wifi-regdom 2>/dev/null \
   && ok "wifi-regdom 语法检查通过" || bad "wifi-regdom 语法错误"
 
@@ -585,9 +591,15 @@ if [ -n "${WRT:-}" ] && [ -d "$WRT/target/linux/rtl9617c" ]; then
   grep -q "SUPPORTED_DEVICES += youhua,pt1570-r10" \
        "$WRT/target/linux/rtl9617c/image/Makefile" \
     && ok "image/Makefile 已注入机型" || bad "image/Makefile 未注入机型"
-  grep -q "youhua,pt1570-r10" \
+  n_wrt_board=$(grep -cE '^[[:space:]]*youhua,pt1570-r10\)$' \
+       "$WRT/target/linux/rtl9617c/base-files/lib/upgrade/platform.sh" || true)
+  [ "$n_wrt_board" -eq 2 ] \
+    && ok "sysupgrade 白名单已注入（check + upgrade 两处合法 case）" \
+    || bad "platform.sh 合法 R10 case 分支 $n_wrt_board 处（应为 2）"
+  ! grep -qE '^[[:space:]]*youhua,pt1570-r10[[:space:]]*\|' \
        "$WRT/target/linux/rtl9617c/base-files/lib/upgrade/platform.sh" \
-    && ok "sysupgrade 白名单已注入" || bad "platform.sh 未注入机型"
+    && ok "platform.sh 无伪 case 分支" \
+    || bad "platform.sh 仍有 youhua,pt1570-r10 | 伪分支（Web 升级会失败）"
   grep -q 'fit_do_upgrade "$1"' \
        "$WRT/target/linux/rtl9617c/base-files/lib/upgrade/platform.sh" \
     && ok "platform.sh 已升级为 fit_do_upgrade 流程" \

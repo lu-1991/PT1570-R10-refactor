@@ -9,10 +9,78 @@
 # 修复：files/lib/firmware/regulatory.db + .p7s 提供带签名的有效数据库，
 # 本脚本再兜底把 regdomain 设为 CN（只要 regdb 有效此命令即成功）。
 # CN 下 5725-5850MHz（信道 149-165）无 NO-IR/无 DFS，5G HE80 正常起。
+#
+# 2026-11-26 补：2.4G 配置兜底。TTL 日志确认 8192XBE 已 probe、AP 固件已加载、
+# phy0-ap0 已进 bridge forwarding，所以"没有 2.4G 信号"更像是保留旧配置时
+# radio 上残留了 5G 信道/带宽（如 channel=149 或 HE80），hostapd 起不来。
+# 这里只在发现**明显非法**的 2.4G 参数时修正，合法配置（auto/1..13/HT20/HE20）
+# 一律不动，避免推翻"协议/信道交还驱动推导"的口径。
+
+. /lib/functions.sh
 
 START=19
 
+WIFI24_CHANGED=0
+
+_normalize_24g_radio() {
+	local sec="$1"
+	local band channel htmode country
+
+	config_get band "$sec" band
+	[ "$band" = "2g" ] || return 0
+
+	config_get country "$sec" country
+	if [ -z "$country" ]; then
+		uci -q set "wireless.$sec.country=CN"
+		WIFI24_CHANGED=1
+	fi
+
+	config_get channel "$sec" channel
+	case "$channel" in
+		''|auto)
+			;;
+		*[!0-9]*)
+			uci -q set "wireless.$sec.channel=6"
+			logger -t wifi-regdom "$sec: 非法 2.4G channel='$channel' -> 6"
+			WIFI24_CHANGED=1
+			;;
+		*)
+			if [ "$channel" -lt 1 ] || [ "$channel" -gt 13 ]; then
+				uci -q set "wireless.$sec.channel=6"
+				logger -t wifi-regdom "$sec: 5G channel '$channel' 落在 2.4G radio -> 6"
+				WIFI24_CHANGED=1
+			fi
+			;;
+	esac
+
+	config_get htmode "$sec" htmode
+	case "$htmode" in
+		*80*|*160*|*320*|*6G*)
+			uci -q set "wireless.$sec.htmode=HT20"
+			logger -t wifi-regdom "$sec: 5G htmode='$htmode' 落在 2.4G radio -> HT20"
+			WIFI24_CHANGED=1
+			;;
+	esac
+}
+
+normalize_24g_config() {
+	[ -f /etc/config/wireless ] || return 0
+
+	WIFI24_CHANGED=0
+	config_load wireless
+	config_foreach _normalize_24g_radio wifi-device
+
+	if [ "$WIFI24_CHANGED" -eq 1 ]; then
+		uci -q commit wireless
+		logger -t wifi-regdom "2.4G 非法配置已修正（auto/1..13/HT20/HE20 保持原样）"
+	fi
+	return 0
+}
+
 start() {
+	# 先修配置再起 wifi（本脚本 START=19，network/wifi 在其后启动）
+	normalize_24g_config
+
 	# 已经是正确的 regdomain 就不动（幂等，避免每次开机刷日志）
 	iw reg get 2>/dev/null | grep -q '^country CN:' && return 0
 	iw reg set CN 2>/dev/null && \

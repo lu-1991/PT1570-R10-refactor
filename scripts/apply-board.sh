@@ -83,26 +83,40 @@ fi
 # ---- 3. sysupgrade 白名单（check + upgrade 两处）----
 # refactor 的 platform.sh 用 case "$board" in ... 列出支持机型，两处 case
 # （platform_check_image / platform_do_upgrade）都要加入 R10。
-if ! grep -q "$BOARD_NAME" "$PLATFORM"; then
+#
+# ⚠️ 2026-11-26 真机回归：之前把 R10 插在 `tianyi,tyfza1-2p5g)` 之后并写成
+#    `youhua,pt1570-r10 |`，shell 不把它当 case 分支，而是当成一个不存在的
+#    命令管道；R10 仍然落到 *) -> "Unsupported board"，Web 上传校验失败，
+#    -F/强制更新也会在 platform_do_upgrade 里再次落到 *) 而失败。
+#    正确做法是把 `|` 留在 tianyi 行尾，让 R10 成为**最后一个带 ) 的分支**。
+if ! grep -qE "^[[:space:]]*${BOARD_NAME}\)$" "$PLATFORM"; then
   python3 - "$PLATFORM" "$BOARD_NAME" <<'PY'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1])
 name = sys.argv[2]
-lines = p.read_text(encoding='utf-8').splitlines(keepends=True)
-out = []
-inserted = 0
-for line in lines:
-    out.append(line)
-    # 在每个机型 case 分支的 "tianyi,tyfza1-2p5g)" 行后插入 R10 分支。
-    # refactor platform.sh 里 check/do 两处各有一个这样的行。
-    if 'tianyi,tyfza1-2p5g)' in line:
-        indent = line[:len(line) - len(line.lstrip())]
-        out.append(f'{indent}{name} |\n')
-        inserted += 1
-if inserted == 0:
-    raise SystemExit('ERROR: platform.sh 里找不到 tianyi,tyfza1-2p5g) case 分支；上游布局变了？')
-p.write_text(''.join(out), encoding='utf-8')
-print(f'platform.sh whitelist extended with {name} ({inserted} case branches)')
+src = p.read_text(encoding='utf-8')
+
+# 自愈：若源码树曾被旧版脚本注入过错误分支，先删掉错误行。
+broken = f'\t{name} |\n'
+if broken in src:
+    src = src.replace(broken, '')
+    print('removed broken whitelist line (old injection syntax)')
+
+# 上游两处都是（注意 | 后有反斜杠续行）：
+#   \tyouhua,pt1500-h10-2p5g|\\\n
+#   \ttianyi,tyfza1-2p5g)\n
+# 必须改成：
+#   \tyouhua,pt1500-h10-2p5g|\\\n
+#   \ttianyi,tyfza1-2p5g|\\\n
+#   \tyouhua,pt1570-r10)\n
+old = '\tyouhua,pt1500-h10-2p5g|\\\n\ttianyi,tyfza1-2p5g)\n'
+new = f'\tyouhua,pt1500-h10-2p5g|\\\n\ttianyi,tyfza1-2p5g|\\\n\t{name})\n'
+n = src.count(old)
+if n != 2:
+    raise SystemExit(f'ERROR: platform.sh case 锚点命中 {n} 次（应为 2）；上游布局变了？')
+src = src.replace(old, new)
+p.write_text(src, encoding='utf-8')
+print(f'platform.sh whitelist extended with {name} ({n} valid case branches)')
 PY
 else
   echo "platform.sh already lists $BOARD_NAME, skip"
@@ -121,10 +135,13 @@ fi
 # ---- 结果校验 ----
 grep -q "SUPPORTED_DEVICES += ${BOARD_NAME}" "$IMG_MK" \
   || { echo "ERROR: SUPPORTED_DEVICES missing in image/Makefile" >&2; exit 1; }
-# platform.sh 两处 case 都要有 R10（check + upgrade），用出现次数 >=2 判定
-n_board=$(grep -c "$BOARD_NAME" "$PLATFORM")
-[ "$n_board" -ge 2 ] \
-  || { echo "ERROR: platform.sh 白名单 R10 出现 $n_board 次(<2)，check/upgrade 未都覆盖" >&2; exit 1; }
+# platform.sh 两处 case 都要有 R10（check + upgrade），且必须是合法 case 分支
+# `youhua,pt1570-r10)`，不是 `youhua,pt1570-r10 |` 这种会被当命令管道的伪分支。
+n_board=$(grep -cE "^[[:space:]]*${BOARD_NAME}\)$" "$PLATFORM" || true)
+[ "$n_board" -eq 2 ] \
+  || { echo "ERROR: platform.sh 合法 R10 case 分支 $n_board 处（应为 2：check + upgrade）" >&2; exit 1; }
+! grep -qE "^[[:space:]]*${BOARD_NAME}[[:space:]]*\|" "$PLATFORM" \
+  || { echo "ERROR: platform.sh 仍有错误的 R10 case 分支写法（... |）" >&2; exit 1; }
 grep -q 'fit_do_upgrade "$1"' "$PLATFORM" \
   || { echo "ERROR: platform.sh 未用 fit_do_upgrade（系统内升级会失败）" >&2; exit 1; }
 grep -q 'rootdisk' "$WRT/target/linux/rtl9617c/dts/rtk-taurus.dtsi" \

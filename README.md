@@ -101,7 +101,7 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
 │   ├── etc/uci-defaults/92-pt1570-r10-wifi-default  # 双频首启 SSID/加密
 │   ├── etc/uci-defaults/92-pt1570-r10-wireless-country # 默认 country=CN
 │   ├── etc/init.d/tyfza1-factory            # factory 校准提取（PON/BOSA；284 字节）
-│   ├── etc/init.d/wifi-regdom               # 开机兜底 regdomain=CN
+│   ├── etc/init.d/wifi-regdom               # 开机兜底 regdomain=CN + 2.4G 非法配置修正
 │   ├── etc/uci-defaults/96-pt1570-r10-leds     # 面板灯 → 真实网口
 │   ├── etc/uci-defaults/97-pt1570-r10-wifi24   # 2.4G 首启兜底
 │   ├── etc/uci-defaults/98-pt1570-r10-wifi-stability  # 断流缓解
@@ -140,8 +140,13 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
 - 4×GE：MDIO 下 `ethernet-phy@1..4`，NI `port0..3` → 面板 LAN4..LAN1，`label` 显式命名；
 - WiFi：pcie0 5G 设 `realtek,ap-firmware` + RFE54，pcie1 2.4G 设 RFE54，双频各绑
   factory 卷的 `wifi_cal_radio0/1` nvmem cell；
+- 2.4G 兜底：`wifi-regdom` 每次开机检查 2.4G radio，只修正明显非法的 5G 残留
+  （channel>13 / HT80+ / 空 country），合法配置保持原样；
 - 启动：`chosen.bootargs` 写死 `root=/dev/fit0` + `u-boot,version` 门闩（不依赖 bootloader
   注入 root=），ubi_device 分区可写（rootfs_data overlay 必需）；
+- 系统内升级：`apply-board.sh` 必须在 `platform.sh` 的 check/upgrade 两处都注入合法
+  case 分支 `youhua,pt1570-r10)`。旧写法 `youhua,pt1570-r10 |` 不是 case 分支，会落到
+  `Unsupported board`，导致 Web 上传验证失败且 `-F` 强制更新也在 do_upgrade 阶段失败；
 - LED/按键：旧 `gpio0` 全局编号按 `bank=floor(n/32), pin=n%32` 换成 `gpio_bankN` 分组编号。
 
 > **遗留冗余**：`files/lib/firmware/realtek/tyfza1/` 下的旧 AP 固件/射频表是双基线时代
