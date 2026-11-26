@@ -1,23 +1,23 @@
 #!/bin/sh /etc/rc.common
 
-# PT1570-R10 修复版（2026-11-13）：flash-calibration.bin 写入精确 284 字节。
+# PT1570-R10 factory 卷数据提取（纯 refactor 口径，2026-11-26 精简）。
 #
-# 根因（真机串口 + 联机实测）：
-#   rtl_ax_ap 驱动 board-cal.h::rtl_ax_board_cal_load() 要求
-#   `fw->size == sizeof(struct rtl_ax_board_cal)` = 284 字节（TYFC0003 容器），
-#   大小不符直接返回 -EINVAL。原脚本 factory_blob 写入整块 4096 字节，
-#   两张卡（8852CE / 8192XBE）probe 全部失败：
-#     rtl_ax_ap ...: error -EINVAL: AP identity or firmware startup failed
-#     -> 没有 phy0/phy1 -> /etc/config/wireless 为空 -> 无线信号全无。
-#   把 0x2000/0x3000 处的前 284 字节写入后，probe 立即成功
-#   （native AP backend chip=0x52/0x53 ... WCPU ready，两路 SSID 正常广播）。
+# 2026-11-25 切上游 rtw89 mac80211 backport + AP 固件包后，WiFi 校准改为
+# DTS nvmem cell 直读 factory 卷（wifi_cal_radio0/1，偏移 0x2000/0x3000），
+# 旧 rtl_ax_ap 驱动要求的 flash-calibration.bin（284B）+ fallback 已不再被
+# 任何消费者读取，连同 tyfza1/ 下整套射频表/固件 bin 一并删除。
+# 本脚本现在只做仍被使用的三件事：
+#   1) PON factory（mode/serial/onu_mac）-> /var/run/tyfza1-factory/pon_factory
+#   2) 基础 MAC -> 写入 lan1..lan5（DTS nvmem 之外的运行时兜底）
+#   3) BOSA 光模块校准 + A2H 数据 -> /tmp/tyfza1-factory/rtl9617c/
 #
 # factory 卷布局（RTLFACT1 魔数，已真机验证）：
 #   0x1000  6 字节  基础 MAC（10:47:e7:8d:bc:fc）
-#   0x2000  4096   8852CE（5G）校准，前 284 字节为 TYFC0003 结构体，其余 0xFF
-#   0x3000  4096   8192XBE（2.4G）校准，同上；末字节 MAC +1/+2 区分 2G/5G
-#   0x4000  1024   BOSA 光模块校准（整块写入，消费者自取）
-#   0x5000  520    PONA2H1（存在时）
+#   0x1010  6 字节  EPON MAC
+#   0x1020  16      PON serial
+#   0x1030  16      PON mode
+#   0x4000  1024    BOSA 光模块校准（整块写入，消费者自取）
+#   0x5000  520     PONA2H1（存在时）
 
 START=09
 
@@ -42,29 +42,6 @@ factory_blob() {
 		rm -f "$tmp"
 		return 1
 	fi
-}
-
-# factory 卷对应区域为空时的兜底（2026-11-18）：用随固件内置的
-# flash-calibration.factory-fallback.bin（284B TYFC0003，取自本机 mtd3
-# static_conf NV_CFG 备份：thermal/xtal/TSSI/RX gaingap；扩展增益表为 0，
-# 驱动按缺表降级）+ 现场基础 MAC 填 wlan_address（偏移 0x42，末字节 +1/+2）。
-factory_fallback() {
-	local chip="$1" mac_off="$2" target="$3"
-	local fb="/lib/firmware/realtek/tyfza1/$chip/flash-calibration.factory-fallback.bin"
-	local mac last
-	[ -f "$fb" ] || { logger -t tyfza1-factory "factory fallback missing: $fb"; return 1; }
-	mkdir -p "${target%/*}"
-	cp "$fb" "$target"
-	chmod 0644 "$target"
-	mac=$(factory_mac $((0x1000)))
-	if [ "${#mac}" = 12 ] && [ "$mac" != ffffffffffff ]; then
-		last=$(printf '%02x' $((0x$(printf '%s' "$mac" | cut -c11-12) + mac_off)))
-		printf '%b' "$(printf '%s' "$(printf '%s' "$mac" | cut -c1-10)$last" \
-			| sed 's/../\\x&/g')" \
-			| dd of="$target" bs=1 seek=66 conv=notrunc 2>/dev/null
-	fi
-	logger -t tyfza1-factory "flash-calibration for $chip came from factory-fallback"
-	return 0
 }
 
 start() {
@@ -100,21 +77,15 @@ start() {
 		return 1
 	fi
 
-	mkdir -p "$runtime/rtl9617c" \
-		"$runtime/tyfza1/rtl8852ce" "$runtime/tyfza1/rtl8192xbe"
+	mkdir -p "$runtime/rtl9617c"
 
 	base_mac=$(factory_mac $((0x1000)))
 	if [ "${#base_mac}" = 12 ] && [ "$base_mac" != ffffffffffff ]; then
 		printf '%s\n' "$base_mac" | sed 's/../&:/g; s/:$//' > "$runtime/lan_mac"
 	fi
 
-	# WiFi 板级校准：驱动按 sizeof(struct rtl_ax_board_cal)=284 严格校验，
-	# 多一个字节都是 -EINVAL。只写结构体本身，不要整块 4096。
-	# factory 卷该区域为空时走 fallback（否则驱动 probe -ENOENT，无线全灭）。
-	factory_blob $((0x2000)) 284 "$runtime/tyfza1/rtl8852ce/flash-calibration.bin" \
-		|| factory_fallback rtl8852ce 2 "$runtime/tyfza1/rtl8852ce/flash-calibration.bin"
-	factory_blob $((0x3000)) 284 "$runtime/tyfza1/rtl8192xbe/flash-calibration.bin" \
-		|| factory_fallback rtl8192xbe 1 "$runtime/tyfza1/rtl8192xbe/flash-calibration.bin"
+	# BOSA 光模块校准（PON 驱动仍读）；WiFi flash-calibration 已由 DTS
+	# nvmem cell 直读 factory 卷，不再生成。
 	factory_blob $((0x4000)) 1024 "$runtime/rtl9617c/bosa-calibration.bin"
 	if [ "$(factory_read $((0x5000)) 7)" = PONA2H1 ]; then
 		factory_read $((0x5000)) 520 > "$runtime/rtl9617c/a2h.bin"

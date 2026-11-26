@@ -28,8 +28,8 @@ for f in diy-part1.sh diy-part2.sh \
          files/etc/uci-defaults/97-pt1570-r10-wifi24 \
          files/etc/uci-defaults/98-pt1570-r10-wifi-stability \
          files/etc/uci-defaults/99-pt1570-fit \
-         files/lib/firmware/rtw89/rtw8192xb_fw.bin \
-         files/lib/firmware/rtw89/rtw8852c_fw.bin \
+         files/lib/firmware/regulatory.db \
+         files/lib/firmware/regulatory.db.p7s \
          files/etc/hotplug.d/ieee80211/10-wifi-detect \
          files/etc/uci-defaults/92-pt1570-r10-wifi-default \
          files/etc/uci-defaults/92-pt1570-r10-wireless-country \
@@ -69,32 +69,21 @@ else
 fi
 
 # ---------------------------------------------------------------
-sec "3. 射频表完整性（ITB 全量 ≥70 张表）"
-T=files/lib/firmware/realtek/tyfza1
-n=$(find "$T" -name '*.txt' | wc -l)
-[ "$n" -ge 70 ] && ok "射频表 $n 张（≥70）" || bad "射频表 $n < 70"
-nb=$(find "$T" -name '*.bin' | wc -l)
-[ "$nb" -ge 7 ] && ok "WiFi 固件 bin ≥ 7 ($nb)" || bad "bin 仅 $nb"
-python3 scripts/verify-rf-tables.py "$T" >/dev/null \
-  && ok "驱动解析器逐字段模拟通过" || bad "有射频表解析不过"
-
-# TSSI 温补表：路径与大小必须和驱动 request_firmware 的期望一致
-# （xb-tssi.h: rtl8192xbe/tssi-thermal-2g.bin = curves[2][2][30] = 120B；
-#   c-tssi.h:  rtl8852ce/tssi-thermal-5g.bin  = curves[3][2][2][30] = 360B）。
-# 2026-11-16 踩坑：2g 表被放进 rtl8852ce/ 且 336B —— 驱动请求的是 rtl8192xbe/
-# 路径，大小不符也会被 "size != , ignored" 丢弃，等于白带。
-t2="$T/rtl8192xbe/tssi-thermal-2g.bin"
-t5="$T/rtl8852ce/tssi-thermal-5g.bin"
-[ -f "$t2" ] && [ "$(wc -c < "$t2")" = 120 ] \
-  && ok "2.4G TSSI 表 120B（rtl8192xbe/，与驱动期望一致）" \
-  || bad "2.4G TSSI 表缺失或大小 != 120B（$t2）"
-[ -f "$t5" ] && [ "$(wc -c < "$t5")" = 360 ] \
-  && ok "5G TSSI 表 360B（rtl8852ce/）" \
-  || bad "5G TSSI 表缺失或大小 != 360B（$t5）"
-# 2.4G 目录下不允许出现 5g 命名、5G 目录下不允许出现 2g 命名（防再次放错）
-[ ! -f "$T/rtl8852ce/tssi-thermal-2g.bin" ] && [ ! -f "$T/rtl8192xbe/tssi-thermal-5g.bin" ] \
-  && ok "TSSI 表未串位（2g 在 rtl8192xbe / 5g 在 rtl8852ce）" \
-  || bad "TSSI 表放错目录（2g 只能 rtl8192xbe，5g 只能 rtl8852ce）"
+sec "3. 旧 rtl_ax_ap WiFi 资产已清除（纯 refactor 口径）"
+# 2026-11-26 清理：切上游 rtw89 mac80211 backport + AP 固件包后，旧 rtl_ax_ap
+# 方案的整套射频表/固件 bin 都不再被读取（新驱动把 PHY_REG/RadioA/TXPWR 表
+# 编译进 C 数组，校准走 DTS nvmem cell，固件由 rtl*-ap-firmware 包提供）。
+# 真机日志证实加载的是 rtw89/rtw8xxx_ap_fw.bin，非 tyfza1/ 下的旧资产。
+[ ! -d files/lib/firmware/realtek/tyfza1 ] \
+  && ok "旧 tyfza1/ 射频表与固件目录已删除" \
+  || bad "仍残留 files/lib/firmware/realtek/tyfza1/（旧 rtl_ax_ap 死资产）"
+[ ! -f scripts/verify-rf-tables.py ] \
+  && ok "旧 verify-rf-tables.py（rtl_ax_ap 解析器模拟）已删除" \
+  || bad "verify-rf-tables.py 仍在（旧方案校验已失效）"
+[ ! -e files/lib/firmware/rtw89/rtw8192xb_fw.bin ] \
+  && [ ! -e files/lib/firmware/rtw89/rtw8852c_fw.bin ] \
+  && ok "非 AP 版 rtw89 固件已删除（AP 版由固件包提供）" \
+  || bad "仍残留非 AP 版 rtw89 固件（真机不用，白占固件体积）"
 
 # ---------------------------------------------------------------
 sec "4. 机型配置关键符号"
@@ -452,17 +441,22 @@ grep -q 'label = "lan1"' "$DTS" && grep -q 'label = "lan4"' "$DTS" \
   || bad "仍有 kmod-rtl-ax-ap（与 rtw89 抢 PCI 设备）"
 
 # ---------------------------------------------------------------
-sec "7. factory 校准 284 字节（WiFi -EINVAL 的根因修复）"
+sec "7. tyfza1-factory 仅保留在用链路（PON/MAC/BOSA）"
 INIT=files/etc/init.d/tyfza1-factory
-grep -q '284' "$INIT" \
-  && ok "init 脚本含 284 字节提取" || bad "init 脚本无 284 断言"
-! grep -qE 'bs=4096|count=[0-9]{2,}' "$INIT" \
-  || { grep -qE 'count=1 ' "$INIT" && ok "整块提取方式正确" \
-       || bad "init 脚本提取方式异常（4096 直写会 -EINVAL）"; }
-grep -q '4096' scripts/patch-upstream.sh && {
-  grep -qE '4096.*(284|= *284|-> 284)|284.*4096' scripts/patch-upstream.sh \
-    && ok "patch-upstream 将包内 4096 改 284" || bad "patch-upstream 无 284 修补逻辑"
-} || ok "patch-upstream 不含 4096（无需修补）"
+# WiFi flash-calibration 已由 DTS nvmem 直读，脚本不应再有实际调用（注释里
+# 说明历史可以保留，只匹配非注释行：行首去空白后不是 #）。
+! grep -qE '^[[:space:]]*[^#[:space:]].*flash-calibration' "$INIT" \
+  && ok "tyfza1-factory 已移除 WiFi flash-calibration 死代码" \
+  || bad "tyfza1-factory 仍调用已删除的 flash-calibration"
+! grep -qE '^[[:space:]]*[^#[:space:]]*(factory_fallback|\. factory_fallback)' "$INIT" \
+  && ok "tyfza1-factory 已移除 factory_fallback 死代码" \
+  || bad "tyfza1-factory 仍调用 factory_fallback（fallback bin 已删）"
+# 仍在用的三件事必须保留
+grep -q 'pon_factory' "$INIT" && grep -q 'bosa-calibration.bin' "$INIT" \
+  && grep -q 'lan_mac' "$INIT" \
+  && ok "tyfza1-factory 保留 PON/MAC/BOSA 在用链路" \
+  || bad "tyfza1-factory 误删了仍在用的 PON/MAC/BOSA 链路"
+sh -n "$INIT" && ok "tyfza1-factory 语法检查通过" || bad "tyfza1-factory 语法错误"
 
 # ---------------------------------------------------------------
 sec "7b. R10 端口命名与面板灯（2026-11-14 真机逐口验证的接线修正）"
@@ -503,56 +497,12 @@ grep -q '4xGE, UBI' board/dts/rtl9617c-pt1570-r10.dts \
   || bad "DTS model 缺 UBI 概览标记"
 
 # ---------------------------------------------------------------
-sec "7e. WiFi 校准文件链路（2026-11-18：缺 symlink = probe -ENOENT 无线全灭）"
-# 驱动 board-cal.h request_firmware 读 /lib/firmware/.../flash-calibration.bin，
-# 真文件由 tyfza1-factory(START=09) 开机生成在 /tmp，rootfs 里必须是符号链接
-# （原厂 rootfs 如此；GitHub 网页上传把 symlink 弄丢了才引入这个坑）。
-for chip in rtl8192xbe rtl8852ce; do
-  LNK="files/lib/firmware/realtek/tyfza1/$chip/flash-calibration.bin"
-  MODE=$(git ls-files -s -- "$LNK" 2>/dev/null | awk '{print $1}')
-  [ "$MODE" = "120000" ] \
-    && ok "$LNK 是符号链接（git mode 120000）" \
-    || bad "$LNK 不是符号链接（git mode=${MODE:-无}，驱动 probe 会失败）"
-  # 关键：symlink 内容必须是设备上的 /tmp 绝对路径。2026-11-19 曾因
-  # Windows core.symlinks=false 下 cp -a ITB 解包目录，把 C:/Users/... 的
-  # 本机绝对路径写进 git blob，设备端读不到校准 → 5G/2.4G probe 全失败。
-  # mode 校验抓不到这个（仍是 120000），必须逐字节比 blob 内容。
-  TGT=$(git show ":$LNK" 2>/dev/null)
-  EXPECT="/tmp/tyfza1-factory/tyfza1/$chip/flash-calibration.bin"
-  [ "$TGT" = "$EXPECT" ] \
-    && ok "$LNK 指向 $EXPECT" \
-    || bad "$LNK 指向 [$TGT]，应为 [$EXPECT]（设备端 probe 必失败）"
-  FB="files/lib/firmware/realtek/tyfza1/$chip/flash-calibration.factory-fallback.bin"
-  if [ "$(stat -c %s "$FB" 2>/dev/null)" = "284" ] \
-     && [ "$(head -c 8 "$FB")" = "TYFC0003" ]; then
-    ok "fallback blob 284B TYFC0003 ($chip，源自 mtd3 NV_CFG 备份)"
-  else
-    bad "$FB 不是 284B TYFC0003"
-  fi
-done
-grep -q 'factory_fallback ' files/etc/init.d/tyfza1-factory \
-  && grep -q 'flash-calibration.factory-fallback.bin' files/etc/init.d/tyfza1-factory \
-  && ok "tyfza1-factory 兜底逻辑在位（factory 卷空时不至于无线全灭）" \
-  || bad "tyfza1-factory 缺 factory_fallback 兜底逻辑"
-sh -n files/etc/init.d/tyfza1-factory \
-  && ok "tyfza1-factory 语法检查通过" || bad "tyfza1-factory 语法错误"
-
-# ---------------------------------------------------------------
-sec "7f. ITB 无线方案资产（2026-11-19 从 new-fit-4ge-20261119.itb 移植）"
-# 新增的两套射频参数目录必须齐全（2.4G RFE50+PON_2G / 5G YH9570）。
-for d in \
-  files/lib/firmware/realtek/tyfza1/rtl8192xbe/RFE50 \
-  files/lib/firmware/realtek/tyfza1/rtl8192xbe/RFE50/PON_2G \
-  files/lib/firmware/realtek/tyfza1/rtl8852ce/RFE54/RTK66587_BPF_YH9570; do
-  [ -d "$d" ] && ok "$(basename "$d")/ 射频目录在位" || bad "缺 $d（ITB 无线方案不完整）"
-done
-# 5G 平台校准 284B 必须是 ITB 原值（TYFC0003 头，修正部分机器 5G 无发射）。
-FBC=files/lib/firmware/realtek/tyfza1/rtl8852ce/flash-calibration.factory-fallback.bin
-[ "$(stat -c %s "$FBC" 2>/dev/null)" = "284" ] \
-  && [ "$(head -c 8 "$FBC")" = "TYFC0003" ] \
-  && ok "5G fallback 为 ITB 284B TYFC0003 平台校准" \
-  || bad "5G fallback 非 284B TYFC0003"
-# rtw89 为内核 built-in，不需要 modules.d 手动加载；旧的 rtl_ax_ap 加载项必须移除。
+sec "7e/7f. WiFi 链路口径（旧 symlink/ITB 资产已清，保留在用项）"
+# 2026-11-26：flash-calibration.bin symlink、fallback blob、ITB 射频表目录
+# 随 tyfza1/ 一并删除——新 rtw89 驱动走 nvmem cell + 编译进驱动的表 + 固件包，
+# 这些旧链路的断言已失效，全部移除。
+# rtw89 为 kmod 包（AutoProbe），不需要 modules.d 手动加载；
+# 旧的 rtl_ax_ap 加载项必须移除。
 [ ! -f files/etc/modules.d/50-rtl-ax-ap ] \
   && ok "旧 rtl_ax_ap 模块加载项已移除" \
   || bad "50-rtl-ax-ap 仍在（会 modprobe 不存在的 rtl_ax_ap）"

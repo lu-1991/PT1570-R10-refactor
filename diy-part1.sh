@@ -11,7 +11,8 @@
 #   3) 修补 fitblk 4MiB 上限（刷入态 /dev/fit0 挂根必需）
 # 不再做：overlay-rtw89（上游已把 rtw89 改为 mac80211 backport + AP 固件包，
 #         由 config/diy-part2 的 kmod 包符号启用）、tyfza1-factory 284 字节修补
-#         （外部 feed 的 PON 包脚本不含该逻辑）、R10 xram 端口命名补丁
+#         与整套旧射频表/固件（新驱动把表编译进驱动、校准走 DTS nvmem cell、
+#         固件由 rtl*-ap-firmware 包提供）、R10 xram 端口命名补丁
 #         （Taurus NI 驱动直接读 DTS label，端口名已在 DTS 里定好）。
 # ================================================================
 set -euo pipefail

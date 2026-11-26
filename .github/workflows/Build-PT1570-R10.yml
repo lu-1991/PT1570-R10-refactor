@@ -444,12 +444,13 @@ jobs:
                   print(f"::error::{kind}: {rel}")
               sys.exit(f"ERROR: {len(missing)} 个文件缺失或不符（rtw89 固件/配置文件未进镜像）")
 
-          # rtw89 固件必须在镜像里（内核 request_firmware 从 /lib/firmware/rtw89 读）
-          for fw in ("rtw8192xb_fw.bin", "rtw8852c_fw.bin"):
+          # rtw89 AP 固件必须由固件包进镜像（内核 request_firmware 从
+          # /lib/firmware/rtw89 读 *_ap_fw.bin；非 AP 版随旧资产一并删除）。
+          for fw in ("rtw8192xb_ap_fw.bin", "rtw8852c_ap_fw.bin"):
               fp = root / "lib/firmware/rtw89" / fw
               if not fp.exists() or fp.stat().st_size < 100000:
-                  sys.exit(f"ERROR: 镜像里 rtw89 固件 {fw} 缺失或过小")
-          print("RTW89_FW_IN_IMAGE=True")
+                  sys.exit(f"ERROR: 镜像里 rtw89 AP 固件 {fw} 缺失或过小")
+          print("RTW89_AP_FW_IN_IMAGE=True")
           bad_perm = []
           for f in files:
               rel = str(f.relative_to(assets))

@@ -100,13 +100,12 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
 │   ├── etc/hotplug.d/ieee80211/10-wifi-detect # 无线 add 后重跑 wifi config
 │   ├── etc/uci-defaults/92-pt1570-r10-wifi-default  # 双频首启 SSID/加密
 │   ├── etc/uci-defaults/92-pt1570-r10-wireless-country # 默认 country=CN
-│   ├── etc/init.d/tyfza1-factory            # factory 校准提取（PON/BOSA；284 字节）
+│   ├── etc/init.d/tyfza1-factory            # factory 卷提取（PON serial/MAC/BOSA；WiFi 校准已走 DTS nvmem）
 │   ├── etc/init.d/wifi-regdom               # 开机兜底 regdomain=CN + 2.4G channel=6/HT20
 │   ├── etc/uci-defaults/96-pt1570-r10-leds     # 面板灯 → 真实网口
 │   ├── etc/uci-defaults/97-pt1570-r10-wifi24   # 2.4G 首启兜底
 │   ├── etc/uci-defaults/98-pt1570-r10-wifi-stability  # 断流缓解
 │   ├── etc/uci-defaults/99-pt1570-fit          # 时区/主机名/FIT 接线兜底
-│   ├── lib/firmware/realtek/tyfza1/            # 遗留射频表/校准资产（AP 固件已改由包提供，见 §6.1）
 │   └── lib/firmware/regulatory.db(+.p7s)       # 带签名的无线法规库（5G 必需）
 ├── board/
 │   ├── dts/rtl9617c-pt1570-r10.dts  # 板级 DTS（基于 rtk-taurus.dtsi 重写，Taurus compatible）
@@ -116,7 +115,6 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
 │   ├── overlay-theme.sh             # 拉库 ucode 版 design + 清 argon 残留（适配外部 feed PON 包）
 │   ├── patch-upstream.sh            # 上游修补：fitblk 4MiB 上限 + NI EEE/LPI 关闭
 │   ├── preflight.sh                 # 静态自检，编译前跑，任何 FAIL 立即终止
-│   ├── verify-rf-tables.py          # 70 张表逐字段模拟驱动解析器
 │   └── verify-fit-boot.py           # 产物 FIT 结构 + bootargs 可启动性校验
 ├── .github/workflows/
 │   └── Build-PT1570-R10.yml         # 唯一 workflow（32 步）
@@ -158,10 +156,14 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
   `Unsupported board`，导致 Web 上传验证失败且 `-F` 强制更新也在 do_upgrade 阶段失败；
 - LED/按键：旧 `gpio0` 全局编号按 `bank=floor(n/32), pin=n%32` 换成 `gpio_bankN` 分组编号。
 
-> **遗留冗余**：`files/lib/firmware/realtek/tyfza1/` 下的旧 AP 固件/射频表是双基线时代
-> 手工塞的资产，新方案下 WiFi 固件由 `rtl*-ap-firmware` 包提供、这些文件不再被 WiFi
-> 驱动读取（PON/BOSA 校准仍依赖 `tyfza1-factory`）。保留它们不影响功能，仅占少量镜像
-> 空间；确认新方案真机稳定后可清理并同步删掉 preflight 第 3/7e/7f 节的对应断言。
+> **旧 WiFi 资产已清理（2026-11-26）**：双基线时代手工塞进
+> `files/lib/firmware/realtek/tyfza1/` 的 70 张射频表 + 旧 AP/NCTL 固件、以及
+> `files/lib/firmware/rtw89/` 的非 AP 版固件，已全部删除（约 3.5 MB）。依据：新 rtw89
+> backport 驱动把 PHY_REG/RadioA/TXPWR 表编译进 C 数组、校准走 DTS `wifi_cal_radio0/1`
+> nvmem cell 直读 factory 卷、固件由 `rtl*-ap-firmware` 包提供，真机日志证实加载的是
+> `rtw89/rtw8xxx_ap_fw.bin`。`tyfza1-factory` 保留 PON serial/MAC/BOSA 提取（仍在用），
+> 已移除 WiFi flash-calibration 的 284B 生成/fallback 死代码。preflight 与 workflow 的
+> 对应断言已同步改为"确认旧资产已清 + AP 固件进镜像"口径。
 
 ### 致谢
 
