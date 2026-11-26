@@ -278,18 +278,24 @@
 };
 
 &pcie1_port {
-	// 2.4 GHz RTL8192XBE. RFE50 (iFEM), NOT RFE54 (eFEM).
-	// PT1570-R10's 2.4G front-end is the PON_2G / iFEM variant: the old
-	// working firmware loaded the RFE50/PON_2G calibration tables. RFE54
-	// makes rtw89 take the eFEM path (rtw8192xb_rfe_gpio(): PAPE/TRSW/LNAON
-	// routing plus GPIO12->ZERO) for a front-end the board does not have,
-	// so RX works (beacon scan OK) but TX never leaves the chip -> no SSID.
-	// realtek,rfe-type overrides the chip efuse, so the log's "RFE: 54"
-	// was this DTS value, not the hardware's real type.
+	// 2.4 GHz RTL8192XBE. eFEM (RFE54) —— 板上是外置 FEM（旧固件表集里的
+	// RFE54/RTK66287 就是这颗 PA+LNA 模组），不是内置 PA 的 iFEM。
+	//
+	// 为什么不能写 50：rtw8192xb_rfe_gpio() 里只有 rfe_type > 50 才会把
+	// PAPE（PA 使能）/ TRSW（TX-RX 开关）/ LNAON 路由到引脚，50 分支一条
+	// GPIO 都不配。写上 50 时外置 FEM 的 T/R 开关永远停在接收侧、PA 使能
+	// 悬空，实测表现就是：RX 正常（扫到 -60dBm 邻居 AP）、hostapd
+	// AP-ENABLED、txpower 20dBm、驱动侧 tx_packets 也在涨，但手机贴着
+	// 天线也搜不到 SSID —— 帧出了 MAC，没有一级放大送出去。
+	//
+	// 历史教训：2026-11-26 曾据"旧厂商固件用 RFE50/PON_2G 表"改写过 50，
+	// 但那份固件同时带了 RFE50 和 RFE54 两套表（厂商一套固件覆盖多个板型），
+	// 不能反推本板型号。真机结果证明 50 是错的。
+	// realtek,rfe-type 会覆盖芯片 efuse，所以日志里的 RFE 值来自这里。
 	wifi2g: wifi@0,0 {
 		compatible = "pci10ec,0192";
 		reg = <0x0000 0 0 0 0>;
-		realtek,rfe-type = <50>;
+		realtek,rfe-type = <54>;
 		nvmem-cells = <&wifi_cal_radio1>;
 		nvmem-cell-names = "wifi-calibration";
 	};

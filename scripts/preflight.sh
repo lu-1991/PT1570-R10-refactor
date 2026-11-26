@@ -413,17 +413,19 @@ grep -q '#include "rtk-taurus.dtsi"' "$DTS" \
 grep -q 'realtek,ap-firmware' "$DTS" \
   && ok "R10 DTS 5G 节点设 realtek,ap-firmware" \
   || bad "R10 DTS 缺 realtek,ap-firmware（AP 固件不会被选用）"
-# 2026-11-26 真机定位：双频 RFE 不对称，不能统一写 54。
-# 2.4G 是 PON_2G/iFEM 前端 -> 必须 RFE50；写 54 会走 eFEM GPIO 路径
-# （PAPE/TRSW/LNAON + GPIO12->ZERO），表现为 RX 正常（能扫到 AP）、
-# hostapd AP-ENABLED，但 TX 不发 -> 手机搜不到 SSID。
-# 5G 是 eFEM -> 保持 RFE54（已验证正常）。
-grep -q 'realtek,rfe-type = <50>' "$DTS" \
-  && ok "R10 DTS 2.4G 设 RFE50（PON_2G/iFEM，TX 前端匹配）" \
-  || bad "R10 DTS 2.4G 缺 realtek,rfe-type=50（写 54 会搜不到 2.4G）"
-[ "$(grep -c 'realtek,rfe-type = <54>' "$DTS")" -eq 1 ] \
-  && ok "R10 DTS 仅 5G 设 RFE54（未污染 2.4G）" \
-  || bad "R10 DTS RFE54 数量 != 1（2.4G 被误设 54 或 5G 丢失）"
+# 2026-11-26 真机定案：双频都用 RFE54（eFEM）。
+# rtw8192xb_rfe_gpio() 只有 rfe_type > 50 才配 PAPE/TRSW/LNAON 的 GPIO 路由，
+# 写 50（iFEM）时外置 FEM 的 T/R 开关停在接收侧、PA 使能悬空，实测症状是
+# RX 正常（扫到 -60dBm 邻居 AP）、AP-ENABLED、txpower 20dBm、驱动 tx_packets
+# 也在涨，但手机贴着天线也搜不到 SSID —— 所以 2.4G 必须是 eFEM。
+# 曾经的错判依据"旧厂商固件用 RFE50/PON_2G 表"，但那份固件同时带了 RFE50 与
+# RFE54 两套表（一套固件覆盖多板型），不能反推本板型号。
+[ "$(grep -c 'realtek,rfe-type = <54>' "$DTS")" -eq 2 ] \
+  && ok "R10 DTS 双频均为 RFE54（eFEM，PA/TRSW/LNAON GPIO 才会被路由）" \
+  || bad "R10 DTS RFE54 数量 != 2（双频都必须 eFEM，2.4G 写 50 会完全不出信号）"
+! grep -q 'realtek,rfe-type = <50>' "$DTS" \
+  && ok "R10 DTS 无 RFE50（iFEM 不配 GPIO，2.4G TX 会全哑）" \
+  || bad "R10 DTS 仍残留 rfe-type=50（2.4G 会 RX 正常但完全不发射）"
 grep -q 'reset-gpios = <&gpio_bank3 5 GPIO_ACTIVE_LOW>' "$DTS" \
   && grep -q 'reset-gpios = <&gpio_bank3 6 GPIO_ACTIVE_LOW>' "$DTS" \
   && ok "R10 DTS 两路 PCIe PERST# 已配置（WiFi 卡可枚举）" \

@@ -137,19 +137,20 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
 
 **有线/WiFi 关键适配点**（都在 `board/dts/rtl9617c-pt1570-r10.dts`）：
 - 4×GE：MDIO 下 `ethernet-phy@1..4`，NI `port0..3` → 面板 LAN4..LAN1，`label` 显式命名；
-- WiFi：pcie0 5G 设 `realtek,ap-firmware` + RFE54（eFEM，已验证正常），pcie1 2.4G
-  设 **RFE50**（PON_2G/iFEM）；双频各绑 factory 卷的 `wifi_cal_radio0/1` nvmem cell。
-  双频 RFE 不对称是 2026-11-26 真机定位的结果：2.4G 若照抄 tianyi 板的 RFE54，
-  驱动会走 eFEM GPIO 路径（PAPE/TRSW/LNAON）控制一块板上没有的前端，表现为
-  `hostapd AP-ENABLED`、能扫到周边 AP（RX 正常），但 beacon 发不出去、手机搜不到
-  SSID。`realtek,rfe-type` 会强制覆盖芯片 efuse，所以日志里的 `RFE: 54` 曾是 DTS
-  值而非硬件真实值；改成 50 后走 iFEM 路径，与旧可用固件的 `RFE50/PON_2G/` 表一致；
+- WiFi：pcie0 5G 设 `realtek,ap-firmware` + RFE54，pcie1 2.4G 也设 **RFE54**（双频
+  都是 eFEM）；双频各绑 factory 卷的 `wifi_cal_radio0/1` nvmem cell。
+  RFE 定案过程（2026-11-26 真机两轮）：`rtw8192xb_rfe_gpio()` 里只有 `rfe_type > 50`
+  才会把 PAPE（PA 使能）/ TRSW（TX-RX 开关）/ LNAON 路由到引脚，`50` 分支一条 GPIO
+  都不配。曾据"旧厂商固件用 `RFE50/PON_2G` 表"把 2.4G 写成 50，真机结果是：能扫到
+  邻居 AP（-60 dBm，RX 正常）、`AP-ENABLED`、`txpower 20 dBm`、驱动侧 `tx_packets`
+  也在涨，但手机贴着天线也搜不到 SSID —— 帧出了 MAC，外置 FEM 的 T/R 开关停在接收
+  侧、PA 使能悬空，一级放大都没有。错判根源是那份厂商固件同时带了 `RFE50` 与
+  `RFE54/RTK66287`（RTK66287 即外置 PA+LNA 模组）两套表，一套固件覆盖多板型，不能
+  反推本板型号。现已改回 54，preflight 断言双频必须都是 `<54>` 且不得出现 `<50>`；
 - 2.4G 发射链路（上游 `b842507`，2026-11-26）：此前上游 103 补丁只带 IQK，没有
   TSSI/DPK/TXGAPK，2.4G 的 TX 功率与温补表实际未标定；该提交补齐 `rtw8192xb_tssi*`
-  / `rtw8192xb_dpk` / `rtw8192xb_txgapk` / `power_trim` / `fem_setup`，并且 TSSI
-  内部按 `is_efem = rfe_type >= 51` 分 eFEM/iFEM 两套初值 —— 与 RFE50 的 iFEM 路径
-  正好对上。**RFE50 修正与这个基线缺一不可**，只改 DTS 不升基线，2.4G 的 TX 标定
-  仍然是空的；
+  / `rtw8192xb_dpk` / `rtw8192xb_txgapk` / `power_trim` / `fem_setup`，TSSI 内部按
+  `is_efem = rfe_type >= 51` 分 eFEM/iFEM 两套初值（RFE54 走 eFEM 那套）；
 - PCIe（上游 `cd75278`，2026-11-26）：`rtk-taurus.dtsi` 给两路控制器加了
   `coherent-atu` 窗口 + `realtek,coherent-hi-addr` + `dma-coherent`（本板 DTS
   include 该 dtsi，自动继承），驱动侧清 8 个 ATU 项并在 link training 前配好低/高

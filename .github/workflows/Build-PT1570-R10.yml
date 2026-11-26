@@ -61,8 +61,8 @@ env:
   # 相对 d39cfc6 新增（2026-11-26，与 R10 直接相关）：
   #   cd75278 pcie: SoC coherent ATU + dma-coherent + 父中断 irq-affinity；
   #   b842507 wifi: 补齐 8192XB 闭环射频校准（TSSI/DPK/TXGAPK/power-trim），
-  #           d39cfc6 只有 IQK，2.4G TX 功率表未标定 —— 与本仓库 RFE50 修正是
-  #           同一问题的两个层面，必须一起上。
+  #           d39cfc6 只有 IQK，2.4G TX 功率表未标定 —— 与本仓库的 DTS 前端
+  #           配置（双频 RFE54/eFEM）是同一问题的两个层面，必须一起上。
   # 锁完整 40 位 SHA：git fetch --depth=1 origin <SHA> 精确检出，字节级可复现；
   # 用分支名会随上游前进而漂移，镜像内容与缓存 key 都会失效。
   SOURCE_REF: ${{ github.event.inputs.source_ref || 'b842507508d2156e01cdb2c51e7697f5e2e4f83f' }}
