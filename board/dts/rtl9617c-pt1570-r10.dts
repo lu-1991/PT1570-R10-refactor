@@ -247,6 +247,11 @@
 	// 板载 8852CE 的 PERST#：不释放复位时链路停在 POLL_COMPLIANCE，
 	// 卡不会被枚举，也就没有 phy0/wlan0。上层 tianyi DTS 同样配置。
 	reset-gpios = <&gpio_bank3 5 GPIO_ACTIVE_LOW>;
+	// 上游 cd75278 起 pcie-taurus 支持把父中断绑到指定 CPU（irq_set_affinity）。
+	// 5G/2.4G 两路 WiFi 的 MSI 都挂在各自控制器父中断上，默认全在 CPU0；
+	// 绑开后中断处理离开 CPU0，转发/软中断不再和协议栈挤一个核。
+	// 属性缺失时驱动记 irq_affinity=-1 直接跳过，所以不写也能启动。
+	irq-affinity = <1>;
 	status = "okay";
 };
 
@@ -267,6 +272,8 @@
 &pcie1 {
 	// 板载 8192XBE 的 PERST#
 	reset-gpios = <&gpio_bank3 6 GPIO_ACTIVE_LOW>;
+	// 见 pcie0：父中断绑到 CPU2（与 tianyi 板 DTS 同策略，避开 CPU0）。
+	irq-affinity = <2>;
 	status = "okay";
 };
 

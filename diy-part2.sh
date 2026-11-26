@@ -16,7 +16,7 @@ ASSETS="${ASSETS:-$GITHUB_WORKSPACE}"
 
 # ---- 机型选择：来自 workflow_dispatch 的 target_model 输入 ----
 # 只编所选机型；其余机型在下面第 5 节统一关闭。
-# 2026-11-25 纯 refactor：上游 d39cfc6 只剩两个机型（pt1500-h10-2p5g /
+# 2026-11-25 纯 refactor：上游 refactor 线只剩两个机型（pt1500-h10-2p5g /
 # tianyi-tyfza1-2p5g），4GE 板定义已被删除；加上我们注入的 R10 共三个。
 ALL_DEVICES="youhua_pt1570_r10 tianyi_tyfza1_2p5g youhua_pt1500_h10_2p5g"
 PROFILE="${TARGET_MODEL:-youhua_pt1570_r10}"

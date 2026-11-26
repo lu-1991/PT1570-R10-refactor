@@ -342,11 +342,16 @@ if [ -n "$WF" ] && [ -f "$WF" ]; then
     && ok "上游锁定为完整 40 位 SHA（字节级可复现）" \
     || bad "上游锁定不是完整 40 位 SHA，无法保证可复现"
 
-  # 纯 refactor 单基线护栏（2026-11-25 起）：基线必须是 d39cfc6，且不得再叠加
+  # 纯 refactor 单基线护栏（2026-11-25 起）：基线必须是 b842507，且不得再叠加
   # 20b4cf4 硬件层（Taurus 驱动已不认旧 rtl9617c-* compatible，叠加会编译失败）。
-  grep -qE "default: 'd39cfc6367e3f9226f1e0590aec7f6206f784047'" "$WF" \
-    && ok "克隆基线为 refactor @ d39cfc6（纯 refactor 单基线）" \
-    || bad "克隆基线不是 refactor @ d39cfc6"
+  # 2026-11-26 从 d39cfc6 升到 b842507：后者含 8192XB 闭环射频校准（TSSI/DPK/
+  # TXGAPK）与 PCIe coherent ATU / irq-affinity，是 2.4G 发射链路的必要前提。
+  grep -qE "default: 'b842507508d2156e01cdb2c51e7697f5e2e4f83f'" "$WF" \
+    && ok "克隆基线为 refactor @ b842507（纯 refactor 单基线 + 8192XB 闭环校准）" \
+    || bad "克隆基线不是 refactor @ b842507"
+  grep -q 'rtw8192xb_tssi_track' "$WF" \
+    && ok "Clone 断言基线含 8192XB 闭环射频校准（b842507）" \
+    || bad "Clone 未断言 b842507（回退基线会丢掉 2.4G TX 标定）"
   ! grep -q 'HARDWARE_REF:' "$WF" \
     && ! grep -q 'rm -rf target/linux/rtl9617c' "$WF" \
     && ok "已移除 20b4cf4 硬件层叠加（纯 refactor）" \
@@ -423,6 +428,12 @@ grep -q 'reset-gpios = <&gpio_bank3 5 GPIO_ACTIVE_LOW>' "$DTS" \
   && grep -q 'reset-gpios = <&gpio_bank3 6 GPIO_ACTIVE_LOW>' "$DTS" \
   && ok "R10 DTS 两路 PCIe PERST# 已配置（WiFi 卡可枚举）" \
   || bad "R10 DTS 缺 PCIe PERST# reset-gpios（wlan 不会出现）"
+# 2026-11-26 上游 cd75278：pcie-taurus 读 "irq-affinity" 把父中断绑到指定 CPU。
+# 不写该属性驱动记 -1 直接跳过（不会失败），但两路 WiFi 的 MSI 就都压在 CPU0
+# 上和协议栈/软中断抢核。tianyi 板 DTS 也是 0/1 -> CPU1、CPU2，这里对齐。
+grep -q 'irq-affinity = <1>' "$DTS" && grep -q 'irq-affinity = <2>' "$DTS" \
+  && ok "R10 DTS 两路 PCIe 父中断绑核（pcie0->CPU1 / pcie1->CPU2，上游 cd75278）" \
+  || bad "R10 DTS 缺 irq-affinity（WiFi 中断全压在 CPU0）"
 grep -q 'wifi_cal_radio0' "$DTS" && grep -q 'wifi_cal_radio1' "$DTS" \
   && ok "R10 DTS 绑定双频 factory 校准 cell" \
   || bad "R10 DTS 未绑定 wifi_cal_radio0/1"

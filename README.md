@@ -7,7 +7,8 @@
 注入定制、编译、校验产物，最后发布到 Release。
 
 - 上游基座（**纯 refactor 单基线**）：`lyq1996/rtl9617c-openwrt`
-  - **克隆基线 = `refactor` @ `d39cfc6`**（2026-11-25 HEAD，Taurus 平台驱动线）
+  - **克隆基线 = `refactor` @ `b842507`**（2026-11-26 HEAD，Taurus 平台驱动线；
+    含 8192XB 闭环射频校准与 PCIe coherent ATU / irq-affinity，见 §6）
 
 ---
 
@@ -43,7 +44,7 @@
 
    | 输入 | 默认 | 说明 |
    |---|---|---|
-   | `source_ref` | `d39cfc6…` | 克隆基线 commit / 分支。默认 = `refactor` @ `d39cfc6`（纯 refactor 单基线，无硬件层叠加，详见 §8） |
+   | `source_ref` | `b842507…` | 克隆基线 commit / 分支。默认 = `refactor` @ `b842507`（纯 refactor 单基线，无硬件层叠加，详见 §6） |
    | `target_model` | `youhua_pt1570_r10` | **选谁编谁**，只产出所选机型的固件 |
    | `upload_release` | `true` | 发布到固定 tag 的滚动 Release |
    | `prune_release` | `true` | 发布后删除该 Release 里不属于本次产物的旧附件（只留最新一套，见 §5.4） |
@@ -125,11 +126,11 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
 ---
 ## 6. 上游与致谢
 
-### 上游基座（纯 refactor 单基线 @ d39cfc6）
+### 上游基座（纯 refactor 单基线 @ b842507）
 
 | 项目 | 值 |
 |---|---|
-| 克隆基线 `SOURCE_REF` | `d39cfc6367e3f9226f1e0590aec7f6206f784047`（`refactor` 2026-11-25 HEAD） |
+| 克隆基线 `SOURCE_REF` | `b842507508d2156e01cdb2c51e7697f5e2e4f83f`（`refactor` 2026-11-26 HEAD） |
 | PON 包 | 外部 feed `crysister/rtl9617c-packages`（`rtl9617c-pon-control` / `luci-app-rtl9617c-pon`） |
 | WiFi | 上游 mac80211 backport 补丁(100-103) + `kmod-rtw89-8852ce` / `kmod-rtw89-8192xbe` + `rtl*-ap-firmware` 包 |
 | R10 板级 | 本仓库 `board/dts/rtl9617c-pt1570-r10.dts`（基于 `rtk-taurus.dtsi` 重写） |
@@ -143,6 +144,17 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
   `hostapd AP-ENABLED`、能扫到周边 AP（RX 正常），但 beacon 发不出去、手机搜不到
   SSID。`realtek,rfe-type` 会强制覆盖芯片 efuse，所以日志里的 `RFE: 54` 曾是 DTS
   值而非硬件真实值；改成 50 后走 iFEM 路径，与旧可用固件的 `RFE50/PON_2G/` 表一致；
+- 2.4G 发射链路（上游 `b842507`，2026-11-26）：此前上游 103 补丁只带 IQK，没有
+  TSSI/DPK/TXGAPK，2.4G 的 TX 功率与温补表实际未标定；该提交补齐 `rtw8192xb_tssi*`
+  / `rtw8192xb_dpk` / `rtw8192xb_txgapk` / `power_trim` / `fem_setup`，并且 TSSI
+  内部按 `is_efem = rfe_type >= 51` 分 eFEM/iFEM 两套初值 —— 与 RFE50 的 iFEM 路径
+  正好对上。**RFE50 修正与这个基线缺一不可**，只改 DTS 不升基线，2.4G 的 TX 标定
+  仍然是空的；
+- PCIe（上游 `cd75278`，2026-11-26）：`rtk-taurus.dtsi` 给两路控制器加了
+  `coherent-atu` 窗口 + `realtek,coherent-hi-addr` + `dma-coherent`（本板 DTS
+  include 该 dtsi，自动继承），驱动侧清 8 个 ATU 项并在 link training 前配好低/高
+  2 GiB DDR 一致窗口；本板 DTS 再补 `irq-affinity = <1>/<2>` 把两路父中断从 CPU0
+  挪到 CPU1/CPU2（与 tianyi 板同策略）。属性缺失时驱动记 -1 跳过，不会编译或启动失败；
 - 2.4G 兜底：`wifi-regdom` 每次开机把 2.4G radio 的 channel 空/auto 落到 6、
   htmode 空/auto 落到 HT20（历史注释里"手机搜不到改 HT20"的对策，真机已复验），
   手动设定的合法值不动；空 country 补 CN；
