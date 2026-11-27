@@ -7,8 +7,9 @@
 注入定制、编译、校验产物，最后发布到 Release。
 
 - 上游基座（**纯 refactor 单基线**）：`lyq1996/rtl9617c-openwrt`
-  - **克隆基线 = `refactor` @ `b842507`**（2026-11-26 HEAD，Taurus 平台驱动线；
-    含 8192XB 闭环射频校准与 PCIe coherent ATU / irq-affinity，见 §6）
+  - **克隆基线 = `refactor` @ `c815335`**（2026-11-27 HEAD，Taurus 平台驱动线；
+    含 8192XB 闭环射频校准、PCIe coherent ATU / irq-affinity，以及 wifi
+    flush/beacon 超时、txpower 下发与 rmmod 崩溃修复，见 §6）
 
 ---
 
@@ -44,7 +45,7 @@
 
    | 输入 | 默认 | 说明 |
    |---|---|---|
-   | `source_ref` | `b842507…` | 克隆基线 commit / 分支。默认 = `refactor` @ `b842507`（纯 refactor 单基线，无硬件层叠加，详见 §6） |
+   | `source_ref` | `c815335…` | 克隆基线 commit / 分支。默认 = `refactor` @ `c815335`（纯 refactor 单基线，无硬件层叠加，详见 §6） |
    | `target_model` | `youhua_pt1570_r10` | **选谁编谁**，只产出所选机型的固件 |
    | `upload_release` | `true` | 发布到固定 tag 的滚动 Release |
    | `prune_release` | `true` | 发布后删除该 Release 里不属于本次产物的旧附件（只留最新一套，见 §5.4） |
@@ -126,11 +127,11 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
 ---
 ## 6. 上游与致谢
 
-### 上游基座（纯 refactor 单基线 @ b842507）
+### 上游基座（纯 refactor 单基线 @ c815335）
 
 | 项目 | 值 |
 |---|---|
-| 克隆基线 `SOURCE_REF` | `b842507508d2156e01cdb2c51e7697f5e2e4f83f`（`refactor` 2026-11-26 HEAD） |
+| 克隆基线 `SOURCE_REF` | `c81533502df6533b273c5201f99f67abd88c62ab`（`refactor` 2026-11-27 HEAD） |
 | PON 包 | 外部 feed `crysister/rtl9617c-packages`（`rtl9617c-pon-control` / `luci-app-rtl9617c-pon`） |
 | WiFi | 上游 mac80211 backport 补丁(100-103) + `kmod-rtw89-8852ce` / `kmod-rtw89-8192xbe` + `rtl*-ap-firmware` 包 |
 | R10 板级 | 本仓库 `board/dts/rtl9617c-pt1570-r10.dts`（基于 `rtk-taurus.dtsi` 重写） |
@@ -151,6 +152,15 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
   TSSI/DPK/TXGAPK，2.4G 的 TX 功率与温补表实际未标定；该提交补齐 `rtw8192xb_tssi*`
   / `rtw8192xb_dpk` / `rtw8192xb_txgapk` / `power_trim` / `fem_setup`，TSSI 内部按
   `is_efem = rfe_type >= 51` 分 eFEM/iFEM 两套初值（RFE54 走 eFEM 那套）；
+- WiFi 稳定性（上游 `79b6a45` / `c815335`，2026-11-26/27）：`79b6a45` 把 6GHz
+  `sband`/`channels`/`bitrates`/`iftype_data` 从 `kfree` 改为 `devm_kfree`，修掉
+  真机 `rmmod rtw89_8192xbe` 时的 `list_del/list_add corruption` 内核警告；
+  `c815335` 在 `dle_is_txq_empty()` 里忽略 AP beacon 的 `CMAC0_MBH`/`DMAC_CPUIO`
+  busy 位、并把 `rtw89_mac_bcn_drop()` 超时按 `beacon_int` 缩放，修掉真机
+  `timed out to flush queues`（2.4G beacon 发不出去的直接证据）；同提交还补齐
+  txpower 下发（`BSS_CHANGED_TXPOWER` / `get_txpower`，用户功率表上限）、
+  multi-BSS（最多 5 组 AP）、SER L2 恢复与 ACS survey —— 这几项与 R10 的
+  2.4G 无发射、5G 弱信号现象直接相关，故基线必须锁在 `c815335` 及以后；
 - PCIe（上游 `cd75278`，2026-11-26）：`rtk-taurus.dtsi` 给两路控制器加了
   `coherent-atu` 窗口 + `realtek,coherent-hi-addr` + `dma-coherent`（本板 DTS
   include 该 dtsi，自动继承），驱动侧清 8 个 ATU 项并在 link training 前配好低/高

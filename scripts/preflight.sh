@@ -342,16 +342,24 @@ if [ -n "$WF" ] && [ -f "$WF" ]; then
     && ok "上游锁定为完整 40 位 SHA（字节级可复现）" \
     || bad "上游锁定不是完整 40 位 SHA，无法保证可复现"
 
-  # 纯 refactor 单基线护栏（2026-11-25 起）：基线必须是 b842507，且不得再叠加
+  # 纯 refactor 单基线护栏（2026-11-25 起）：基线必须是 c815335，且不得再叠加
   # 20b4cf4 硬件层（Taurus 驱动已不认旧 rtl9617c-* compatible，叠加会编译失败）。
-  # 2026-11-26 从 d39cfc6 升到 b842507：后者含 8192XB 闭环射频校准（TSSI/DPK/
-  # TXGAPK）与 PCIe coherent ATU / irq-affinity，是 2.4G 发射链路的必要前提。
-  grep -qE "default: 'b842507508d2156e01cdb2c51e7697f5e2e4f83f'" "$WF" \
-    && ok "克隆基线为 refactor @ b842507（纯 refactor 单基线 + 8192XB 闭环校准）" \
-    || bad "克隆基线不是 refactor @ b842507"
+  # 2026-11-27 从 b842507 升到 c815335：后者含 flush/beacon timeout 修复、
+  # txpower 下发与 rmmod 崩溃修复（79b6a45），真机 2.4G "timed out to flush
+  # queues" 与 rmmod list corruption 都靠它；b842507 的 8192XB 闭环校准与
+  # cd75278 的 PCIe coherent/irq-affinity 仍是 2.4G 发射链路的必要前提。
+  grep -qE "default: 'c81533502df6533b273c5201f99f67abd88c62ab'" "$WF" \
+    && ok "克隆基线为 refactor @ c815335（纯 refactor 单基线 + wifi flush/txpower 修复）" \
+    || bad "克隆基线不是 refactor @ c815335"
   grep -q 'rtw8192xb_tssi_track' "$WF" \
     && ok "Clone 断言基线含 8192XB 闭环射频校准（b842507）" \
     || bad "Clone 未断言 b842507（回退基线会丢掉 2.4G TX 标定）"
+  grep -qF 'devm_kfree(rtwdev->dev, sband)' "$WF" \
+    && ok "Clone 断言基线含 rmmod 崩溃修复（79b6a45）" \
+    || bad "Clone 未断言 79b6a45（回退基线会重新引入 kfree/devm 崩溃）"
+  grep -qF 'B_AX_WDE_EMPTY_QUE_CMAC0_MBH' "$WF" \
+    && ok "Clone 断言基线含 flush/beacon timeout 修复（c815335）" \
+    || bad "Clone 未断言 c815335（回退基线会重新引入 2.4G flush 超时）"
   ! grep -q 'HARDWARE_REF:' "$WF" \
     && ! grep -q 'rm -rf target/linux/rtl9617c' "$WF" \
     && ok "已移除 20b4cf4 硬件层叠加（纯 refactor）" \

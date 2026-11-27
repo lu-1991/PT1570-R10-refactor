@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: '上游基线 commit / 分支。默认 = refactor @ b842507（纯 refactor 单基线，无硬件层叠加），一般不要改'
+        description: '上游基线 commit / 分支。默认 = refactor @ c815335（纯 refactor 单基线，含 wifi flush/beacon 与 txpower 修复），一般不要改'
         required: false
-        default: 'b842507508d2156e01cdb2c51e7697f5e2e4f83f'
+        default: 'c81533502df6533b273c5201f99f67abd88c62ab'
         type: string
       target_model:
         description: '选择要编译的机型（只产出所选机型的固件）。youhua_pt1570_r10=友华 PT1570-R10(默认/真机验证目标)；tianyi_tyfza1_2p5g / youhua_pt1500_h10_2p5g=上游机型(未在本仓库真机验证)'
@@ -52,20 +52,26 @@ env:
   BUILD_ROOT: /workdir
   REPO_URL: https://github.com/lyq1996/rtl9617c-openwrt.git
   # ===== 纯 refactor 单基线（2026-11-25 起）=====
-  # SOURCE_REF = refactor @ b842507（2026-11-26 HEAD）。不再叠加 20b4cf4 硬件层：
+  # SOURCE_REF = refactor @ c815335（2026-11-27 HEAD）。不再叠加 20b4cf4 硬件层：
   #   上游从 f75f4ca 起把平台驱动全部重写为 Taurus、删掉 rtl9617c compatibles
   #   和 4GE 板级 DTS；硬件层那套 rtl9617c-* DTS 已无法在新驱动上工作。
   #   本仓库改为直接跟 refactor 主线：R10 板级 DTS 由 board/dts 提供（基于
   #   rtk-taurus.dtsi 重写），PON 包走外部 feed crysister/rtl9617c-packages，
   #   WiFi 用上游 mac80211 backport + rtl*-ap-firmware 包（见 299da19）。
-  # 相对 d39cfc6 新增（2026-11-26，与 R10 直接相关）：
+  # 相对 d39cfc6 新增（2026-11-26/27，与 R10 直接相关）：
   #   cd75278 pcie: SoC coherent ATU + dma-coherent + 父中断 irq-affinity；
   #   b842507 wifi: 补齐 8192XB 闭环射频校准（TSSI/DPK/TXGAPK/power-trim），
   #           d39cfc6 只有 IQK，2.4G TX 功率表未标定 —— 与本仓库的 DTS 前端
-  #           配置（双频 RFE54/eFEM）是同一问题的两个层面，必须一起上。
+  #           配置（双频 RFE54/eFEM）是同一问题的两个层面，必须一起上；
+  #   79b6a45 wifi: 修 rmmod 时 6GHz sband 用 kfree 释放 devm 分配导致的
+  #           list corruption / kernel panic（真机 rmmod 已复现）；
+  #   c815335 wifi: 修 flush/beacon timeout（dle_is_txq_empty 忽略 AP beacon
+  #           busy 位、bcn_drop 超时按 beacon_int 缩放）、txpower 下发、
+  #           multi-BSS、SER L2 与 ACS survey —— 真机 2.4G "timed out to
+  #           flush queues" 与该修复直接对应，必须一起上。
   # 锁完整 40 位 SHA：git fetch --depth=1 origin <SHA> 精确检出，字节级可复现；
   # 用分支名会随上游前进而漂移，镜像内容与缓存 key 都会失效。
-  SOURCE_REF: ${{ github.event.inputs.source_ref || 'b842507508d2156e01cdb2c51e7697f5e2e4f83f' }}
+  SOURCE_REF: ${{ github.event.inputs.source_ref || 'c81533502df6533b273c5201f99f67abd88c62ab' }}
   # 本次要编译的机型（workflow_dispatch 下拉选择，diy-part2/校验/Release 全跟随它）
   TARGET_MODEL: ${{ github.event.inputs.target_model || 'youhua_pt1570_r10' }}
   # 注意：必须用 inputs.*（布尔上下文）。github.event.inputs.* 是字符串，
@@ -157,7 +163,7 @@ jobs:
           set -e
           cd "$BUILD_ROOT"
 
-          # ---- 纯 refactor 单基线：refactor @ b842507 ----
+          # ---- 纯 refactor 单基线：refactor @ c815335 ----
           git clone "$REPO_URL" --depth=1 openwrt
           cd openwrt
           if ! git fetch -q --depth=1 origin "$SOURCE_REF"; then
@@ -177,14 +183,18 @@ jobs:
           test -f target/linux/rtl9617c/dts/rtk-taurus.dtsi
           grep -q 'realtek,taurus' target/linux/rtl9617c/dts/rtk-taurus.dtsi
 
-          # 断言基线含 2026-11-26 两个关键提交（回退到 d39cfc6 会静默丢掉
-          # 2.4G 闭环射频校准与 PCIe coherent/irq-affinity，等于把已修的
-          # 2.4G 无发射问题重新引回来，所以这里硬失败而不是警告）。
+          # 断言基线含 2026-11-26/27 四个关键提交（回退会静默把已修的 2.4G
+          # 无发射、flush 超时、rmmod 崩溃重新引回来，所以硬失败而不是警告）。
           grep -q 'coherent-atu' target/linux/rtl9617c/dts/rtk-taurus.dtsi \
             && grep -q 'irq-affinity' target/linux/rtl9617c/files-6.18/drivers/pci/controller/dwc/pcie-taurus.c \
             || { echo "::error::基线缺 cd75278（PCIe coherent ATU / irq-affinity）"; exit 1; }
           grep -q 'rtw8192xb_tssi_track' package/kernel/mac80211/patches/rtl/103-wifi-rtw89-add-8192xbe.patch \
             || { echo "::error::基线缺 b842507（8192XB 闭环射频校准 TSSI/DPK/TXGAPK）"; exit 1; }
+          grep -qF 'devm_kfree(rtwdev->dev, sband)' package/kernel/mac80211/patches/rtl/100-wifi-rtw89-ap-firmware-variant.patch \
+            || { echo "::error::基线缺 79b6a45（rmmod 时 kfree/devm mismatched 崩溃）"; exit 1; }
+          grep -qF 'B_AX_WDE_EMPTY_QUE_CMAC0_MBH' package/kernel/mac80211/patches/rtl/100-wifi-rtw89-ap-firmware-variant.patch \
+            && grep -qF 'beacon_int * 1100' package/kernel/mac80211/patches/rtl/100-wifi-rtw89-ap-firmware-variant.patch \
+            || { echo "::error::基线缺 c815335（flush/beacon timeout 修复）"; exit 1; }
           echo "source: pure-refactor baseline=$BASE_HASH (Taurus)"
 
       # =========================================================

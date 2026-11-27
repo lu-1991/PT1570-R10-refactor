@@ -5,7 +5,7 @@
 #
 # diy-part1 = 往源码树里"注入"，diy-part2 = 对 .config "定型"。
 #
-# 2026-11-25 重写为纯 refactor (Taurus) 基线（现为 b842507，2026-11-26 升级）：
+# 2026-11-25 重写为纯 refactor (Taurus) 基线（现为 c815335，2026-11-27 升级）：
 #   1) 注入 PT1570-R10 板级支持（新写 Taurus DTS + Device + sysupgrade 白名单）
 #   2) 主题切换 argon -> design（拉库 ucode 版 + 清厂商抢主题脚本）
 #   3) 修补 fitblk 4MiB 上限（刷入态 /dev/fit0 挂根必需）

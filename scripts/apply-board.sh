@@ -6,7 +6,7 @@
 #   env WRT          = 源码树路径
 #   env DTS_STATUS   = experimental | verified
 #
-# 2026-11-25 重写：适配双基线废弃后的纯 refactor 树（现基线 b842507，2026-11-26）。
+# 2026-11-25 重写：适配双基线废弃后的纯 refactor 树（现基线 c815335，2026-11-27）。
 #   * refactor 已自带 Taurus 平台驱动/LED/USB/PCIe；platform.sh 已用
 #     fit_do_upgrade，无需再注入升级流程或 H10 fip 钩子守护。
 #   * 本脚本只做 3 件事：注入 R10 DTS、注入 Device 定义、扩展 sysupgrade 白名单。
