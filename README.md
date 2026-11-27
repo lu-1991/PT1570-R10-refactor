@@ -136,58 +136,6 @@ sysupgrade -n /tmp/openwrt-...-youhua_pt1570_r10-squashfs-sysupgrade-20261114-15
 | WiFi | 上游 mac80211 backport 补丁(100-103) + `kmod-rtw89-8852ce` / `kmod-rtw89-8192xbe` + `rtl*-ap-firmware` 包 |
 | R10 板级 | 本仓库 `board/dts/rtl9617c-pt1570-r10.dts`（基于 `rtk-taurus.dtsi` 重写） |
 
-**有线/WiFi 关键适配点**（都在 `board/dts/rtl9617c-pt1570-r10.dts`）：
-- 4×GE：MDIO 下 `ethernet-phy@1..4`，NI `port0..3` → 面板 LAN4..LAN1，`label` 显式命名；
-- WiFi：pcie0 5G 设 `realtek,ap-firmware` + RFE54，pcie1 2.4G 也设 **RFE54**（双频
-  都是 eFEM）；双频各绑 factory 卷的 `wifi_cal_radio0/1` nvmem cell。
-  RFE 定案过程（2026-11-26 真机两轮）：`rtw8192xb_rfe_gpio()` 里只有 `rfe_type > 50`
-  才会把 PAPE（PA 使能）/ TRSW（TX-RX 开关）/ LNAON 路由到引脚，`50` 分支一条 GPIO
-  都不配。曾据"旧厂商固件用 `RFE50/PON_2G` 表"把 2.4G 写成 50，真机结果是：能扫到
-  邻居 AP（-60 dBm，RX 正常）、`AP-ENABLED`、`txpower 20 dBm`、驱动侧 `tx_packets`
-  也在涨，但手机贴着天线也搜不到 SSID —— 帧出了 MAC，外置 FEM 的 T/R 开关停在接收
-  侧、PA 使能悬空，一级放大都没有。错判根源是那份厂商固件同时带了 `RFE50` 与
-  `RFE54/RTK66287`（RTK66287 即外置 PA+LNA 模组）两套表，一套固件覆盖多板型，不能
-  反推本板型号。现已改回 54，preflight 断言双频必须都是 `<54>` 且不得出现 `<50>`；
-- 2.4G 发射链路（上游 `b842507`，2026-11-26）：此前上游 103 补丁只带 IQK，没有
-  TSSI/DPK/TXGAPK，2.4G 的 TX 功率与温补表实际未标定；该提交补齐 `rtw8192xb_tssi*`
-  / `rtw8192xb_dpk` / `rtw8192xb_txgapk` / `power_trim` / `fem_setup`，TSSI 内部按
-  `is_efem = rfe_type >= 51` 分 eFEM/iFEM 两套初值（RFE54 走 eFEM 那套）；
-- WiFi 稳定性（上游 `79b6a45` / `c815335`，2026-11-26/27）：`79b6a45` 把 6GHz
-  `sband`/`channels`/`bitrates`/`iftype_data` 从 `kfree` 改为 `devm_kfree`，修掉
-  真机 `rmmod rtw89_8192xbe` 时的 `list_del/list_add corruption` 内核警告；
-  `c815335` 在 `dle_is_txq_empty()` 里忽略 AP beacon 的 `CMAC0_MBH`/`DMAC_CPUIO`
-  busy 位、并把 `rtw89_mac_bcn_drop()` 超时按 `beacon_int` 缩放，修掉真机
-  `timed out to flush queues`（2.4G beacon 发不出去的直接证据）；同提交还补齐
-  txpower 下发（`BSS_CHANGED_TXPOWER` / `get_txpower`，用户功率表上限）、
-  multi-BSS（最多 5 组 AP）、SER L2 恢复与 ACS survey —— 这几项与 R10 的
-  2.4G 无发射、5G 弱信号现象直接相关，故基线必须锁在 `c815335` 及以后；
-- PCIe（上游 `cd75278`，2026-11-26）：`rtk-taurus.dtsi` 给两路控制器加了
-  `coherent-atu` 窗口 + `realtek,coherent-hi-addr` + `dma-coherent`（本板 DTS
-  include 该 dtsi，自动继承），驱动侧清 8 个 ATU 项并在 link training 前配好低/高
-  2 GiB DDR 一致窗口；本板 DTS 再补 `irq-affinity = <1>/<2>` 把两路父中断从 CPU0
-  挪到 CPU1/CPU2（与 tianyi 板同策略）。属性缺失时驱动记 -1 跳过，不会编译或启动失败；
-- 2.4G 兜底：`wifi-regdom` 每次开机把 2.4G radio 的 channel 空/auto 落到 6、
-  htmode 空/auto 落到 HT20（历史注释里"手机搜不到改 HT20"的对策，真机已复验），
-  手动设定的合法值不动；空 country 补 CN；
-- 四口 Link flap：`patch-upstream.sh` 从 NI 驱动 MAC 能力层去掉
-  `lpi_capabilities` / `lpi_interfaces` / `lpi_timer_default`，关闭 EEE/LPI
-  （refactor 新引入，GPHY 用 vendor MMD 模拟 EEE，与对端节能状态机不同步会反复重训链路）；
-- 启动：`chosen.bootargs` 写死 `root=/dev/fit0` + `u-boot,version` 门闩（不依赖 bootloader
-  注入 root=），ubi_device 分区可写（rootfs_data overlay 必需）；
-- 系统内升级：`apply-board.sh` 必须在 `platform.sh` 的 check/upgrade 两处都注入合法
-  case 分支 `youhua,pt1570-r10)`。旧写法 `youhua,pt1570-r10 |` 不是 case 分支，会落到
-  `Unsupported board`，导致 Web 上传验证失败且 `-F` 强制更新也在 do_upgrade 阶段失败；
-- LED/按键：旧 `gpio0` 全局编号按 `bank=floor(n/32), pin=n%32` 换成 `gpio_bankN` 分组编号。
-
-> **旧 WiFi 资产已清理（2026-11-26）**：双基线时代手工塞进
-> `files/lib/firmware/realtek/tyfza1/` 的 70 张射频表 + 旧 AP/NCTL 固件、以及
-> `files/lib/firmware/rtw89/` 的非 AP 版固件，已全部删除（约 3.5 MB）。依据：新 rtw89
-> backport 驱动把 PHY_REG/RadioA/TXPWR 表编译进 C 数组、校准走 DTS `wifi_cal_radio0/1`
-> nvmem cell 直读 factory 卷、固件由 `rtl*-ap-firmware` 包提供，真机日志证实加载的是
-> `rtw89/rtw8xxx_ap_fw.bin`。`tyfza1-factory` 保留 PON serial/MAC/BOSA 提取（仍在用），
-> 已移除 WiFi flash-calibration 的 284B 生成/fallback 死代码。preflight 与 workflow 的
-> 对应断言已同步改为"确认旧资产已清 + AP 固件进镜像"口径。
-
 ### 致谢
 
 - 源码基座：[`lyq1996/rtl9617c-openwrt`](https://github.com/lyq1996/rtl9617c-openwrt)
